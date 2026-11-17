@@ -1,0 +1,4 @@
+# Your private data repo lives here; it has its own git repository.
+/data/
+__pycache__/
+*.pyc

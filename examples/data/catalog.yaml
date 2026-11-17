@@ -1,0 +1,92 @@
+# data/catalog.yaml: what you want on a machine, and why.
+# `mi restore` offers these groups and items; `mi render` turns this file into INVENTORY.md;
+# `mi check` compares it with the snapshot (`mi export`) and lists uncatalogued and missing things.
+#
+# Item keys (all optional except id):
+#   name, why, notes          text shown in the wizard and in INVENTORY.md
+#   default: true             pre-ticked in the wizard; picked by --all-defaults and by a group id in --select
+#   compat: {ubuntu: ["22.04", "24.04"]}   hidden on other systems (ubuntu: [] = any Ubuntu version)
+#   apt_sources: [id]         keys of the apt_sources map below; added before apt runs
+#   apt / snap / flatpak / vscode / pip: [names]     snap entries may carry flags: "code --classic"
+#   gnome_extensions: [uuid]  printed as a manual step
+#   dconf: [/org/gnome/...]   loaded from snapshot/dconf/
+#   dotfiles: [~/path]        restored from snapshot/dotfiles/ (globs allowed)
+#   systemd: [system/x.service, user/y.service]   installed and enabled (unless expected_disabled)
+#   etc: [path relative to /etc]                  restored from snapshot/etc/files/
+#   repos: [~/path]           cloned with the remote and branch recorded in snapshot/repos.tsv
+#   post: [shell commands]    run after everything else
+#   manual: |                 steps mi cannot do (downloads, licences); printed at the end
+
+apt_sources:
+  # file: copied from snapshot/apt-sources/; keyring: copied from the snapshot to the same path.
+  vscode: {file: vscode.sources, keyring: /usr/share/keyrings/microsoft.gpg}
+  # key_url: download the key instead (for repositories that used the old apt-key method);
+  # one-line .list entries without signed-by get signed-by=<keyring> added.
+  example-legacy: {line: "deb http://repo.example.com/ubuntu jammy main",
+                   keyring: /usr/share/keyrings/example-archive-keyring.gpg,
+                   key_url: "https://repo.example.com/key.gpg"}
+
+groups:
+  - id: dev
+    name: Development tools
+    items:
+      - id: build-tools
+        name: C/C++ toolchain
+        why: building native code
+        apt: [build-essential, cmake, ninja-build, pkg-config]
+        default: true
+      - id: git
+        name: git and git-lfs
+        apt: [git, git-lfs]
+        post: [git lfs install]
+        default: true
+      - id: vscode
+        name: Visual Studio Code
+        apt_sources: [vscode]
+        apt: [code]
+        vscode: [ms-python.python, ms-vscode.cpptools]
+        dotfiles: [~/.config/Code/User/settings.json]
+        default: true
+
+  - id: desktop
+    name: Desktop apps
+    items:
+      - id: vlc
+        name: VLC
+        apt: [vlc]
+        default: true
+      - id: discord
+        name: Discord
+        snap: [discord]
+      - id: obsidian
+        name: Obsidian
+        flatpak: [md.obsidian.Obsidian]
+      - id: some-licensed-app
+        name: Some licensed app
+        manual: |
+          Download the installer from the vendor's site and run it.
+
+  - id: legacy
+    name: Old-release only
+    items:
+      - id: legacy-tool
+        name: Tool from a legacy repository
+        apt_sources: [example-legacy]
+        apt: [example-tool]
+        compat: {ubuntu: ["22.04"]}
+
+config:
+  - id: shell
+    name: Shell dotfiles
+    dotfiles: [~/.bashrc, ~/.profile, ~/.gitconfig]
+    default: true
+  - id: dns-over-tls
+    name: DNS over TLS
+    etc: [systemd/resolved.conf.d/dot.conf]
+    post: [sudo systemctl restart systemd-resolved]
+
+# Seen on the machine and understood, but never restored. Counts as catalogued for `mi check`.
+known:
+  - id: installer-etc
+    why: written by the OS installer
+    etc: [default/keyboard]

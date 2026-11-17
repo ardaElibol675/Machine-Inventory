@@ -1,0 +1,55 @@
+# data/config.yaml: personal settings for machine-inventory. Every key is optional;
+# the values below show the format. Paths may use ~ and $VARS.
+
+# Allowed top-level entries in your home directory. `mi check` warns about anything else.
+# An empty list turns the check off.
+home_layout: [Desktop, Documents, Downloads, Music, Pictures, Public, Templates, Videos, Projects, snap]
+
+# Files under $HOME to back up into snapshot/dotfiles/. Globs are allowed.
+dotfiles:
+  - ~/.bashrc
+  - ~/.profile
+  - ~/.gitconfig
+  - ~/.config/Code/User/settings.json
+  - ~/.local/bin/*.sh
+
+# dconf paths to dump into snapshot/dconf/ (GNOME settings).
+dconf_paths:
+  - /org/gnome/desktop/interface/
+  - /org/gnome/desktop/wm/
+  - /org/gnome/shell/
+
+# Where to look for git repositories, and how deep.
+repo_scan:
+  roots: ["~"]
+  depth: 5
+  exclude: ["*/.cache/*", "*/.local/*", "*/snap/*", "*/build/*", "*/install/*", "*/node_modules/*"]
+
+# Packages you installed from your own .deb files (no repository). `mi check` does not warn about them.
+known_local_debs: []
+
+# Your own systemd units that are disabled on purpose: check does not warn, restore does not enable.
+expected_disabled: []
+#  - my-tool.service
+
+# apt packages that restore never installs and check never reports as uncatalogued.
+restore_exclude: []
+
+# Leftover configuration of programs you removed. `mi check` warns while the path exists.
+residue_checks: []
+#  - {path: /etc/docker, requires_command: docker, note: Docker is not installed}
+#  - {path: /etc/sysctl.d/60-foo.conf, requires_path: /opt/foo, note: Foo SDK is not installed}
+
+# Extra regexes for /etc files that must never be copied (added to the built-in list:
+# pam.d, shadow, sudoers, ssh, NetworkManager, fstab, *.key, *.pem, ...).
+etc_secret_patterns: []
+
+# Extra regexes for /etc files to ignore completely.
+etc_ignore_patterns: []
+
+# Disk usage thresholds in percent.
+disk: {mounts: [/, /home], warn: 85, fail: 90}
+
+# Words that must never appear in the public tool repo: your name, your GitHub handle,
+# private project names. scripts/check-public.sh greps for them (plus your username and git email).
+private_terms: []
