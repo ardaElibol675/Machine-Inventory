@@ -116,6 +116,7 @@ def _same_dev(path, dev):
 
 
 def collect(ctx, snap):
+    from .systemd import is_own_system_unit
     secret = re.compile("|".join([SECRET] + list(ctx.cfg["etc_secret_patterns"])))
 
     def _do():
@@ -129,6 +130,8 @@ def collect(ctx, snap):
                 pass
             elif secret.search(p):
                 note = "not copied (may contain secrets)"
+            elif status == ADDED and is_own_system_unit(p):
+                note = "saved by the systemd module (as a template)"
             elif os.path.islink(p):
                 note = f"symlink -> {os.readlink(p)}"
             elif os.path.isfile(p) and os.access(p, os.R_OK):
@@ -171,9 +174,7 @@ def check(ctx, rep):
 
 def drift(ctx, catalog, rep):
     claimed = catalog.claimed("etc")
-    # Own unit files under /etc/systemd/system are handled by the systemd module.
-    units = {f"systemd/{u}" for u in catalog.claimed("systemd") if u.startswith("system/")}
-    unclaimed = [p for p in saved(ctx) if p not in claimed and p not in units]
+    unclaimed = [p for p in saved(ctx) if p not in claimed]
     if unclaimed:
         rep.warn(f"/etc: uncatalogued changes: {' '.join(unclaimed)}")
     else:

@@ -36,6 +36,12 @@ class Step:
     commands: list = field(default_factory=list)
     notes: list = field(default_factory=list)
     manual: bool = False          # printed only, never executed
+    soft: bool = False            # a failure is recorded and skipped without asking (installs that
+                                  # nothing else depends on); otherwise mi asks retry/skip/abort
+
+
+# Exit code of a command that finished but skipped some of its work (e.g. `mi apt-install`).
+PARTIAL = 3
 
 
 class Report:

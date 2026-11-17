@@ -38,4 +38,5 @@ def steps(ctx, catalog, items):
         return []
     cmds = [f"flatpak remote-add --if-not-exists flathub {q(FLATHUB)}"]
     cmds += [f"flatpak install -y flathub {q(a)}" for a in apps]
-    return [Step(PHASE_FLATPAK, f"flatpak apps ({len(apps)})", cmds)]
+    return [Step(PHASE_FLATPAK, "flathub remote", cmds[:1]),
+            Step(PHASE_FLATPAK, f"flatpak apps ({len(apps)})", cmds[1:], soft=True)]

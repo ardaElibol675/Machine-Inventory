@@ -5,13 +5,17 @@
 # Item keys (all optional except id):
 #   name, why, notes          text shown in the wizard and in INVENTORY.md
 #   default: true             pre-ticked in the wizard; picked by --all-defaults and by a group id in --select
-#   compat: {ubuntu: ["22.04", "24.04"]}   hidden on other systems (ubuntu: [] = any Ubuntu version)
+#   compat: {ubuntu: ["22.04", ">=26.04"]} hidden on other releases; versions may be exact or
+#                             ranges (>=, <=, >, <); ubuntu: [] = any Ubuntu version
+#   requires_paths: [/sys/bus/platform/devices/asus-nb-wmi]   hardware condition: hidden unless
+#                             every glob matches on the target (laptop-specific fixes, drivers)
 #   apt_sources: [id]         keys of the apt_sources map below; added before apt runs
 #   apt / snap / flatpak / vscode / pip: [names]     snap entries may carry flags: "code --classic"
 #   gnome_extensions: [uuid]  printed as a manual step
 #   dconf: [/org/gnome/...]   loaded from snapshot/dconf/
 #   dotfiles: [~/path]        restored from snapshot/dotfiles/ (globs allowed)
-#   systemd: [system/x.service, user/y.service]   installed and enabled (unless expected_disabled)
+#   systemd: [system/x.service, user/y.service]   installed and enabled (unless expected_disabled);
+#                             saved as templates, so your home path is rewritten for the target user
 #   etc: [path relative to /etc]                  restored from snapshot/etc/files/
 #   repos: [~/path]           cloned with the remote and branch recorded in snapshot/repos.tsv
 #   post: [shell commands]    run after everything else
@@ -84,6 +88,15 @@ config:
     name: DNS over TLS
     etc: [systemd/resolved.conf.d/dot.conf]
     post: [sudo systemctl restart systemd-resolved]
+  - id: battery-limit
+    name: Laptop battery charge limit
+    systemd: [system/battery-threshold.service]
+    requires_paths: [/sys/class/power_supply/BAT*/charge_control_end_threshold]
+  # Prefer editing a package's own config file in place over copying the whole file:
+  # the target release keeps its version of the file and only your setting changes.
+  - id: no-release-prompt
+    name: No new release prompt
+    post: ["sudo sed -i 's/^Prompt=.*/Prompt=never/' /etc/update-manager/release-upgrades"]
 
 # Seen on the machine and understood, but never restored. Counts as catalogued for `mi check`.
 known:

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import __version__, catalog as catalog_mod, plan, ui
 from .config import EXAMPLES, Context
-from .modules import base, each
+from .modules import apt, base, each
 from .render import render
 
 
@@ -111,12 +111,14 @@ def cmd_check(args):
 def cmd_catalog(args):
     ctx = _ctx(args)
     cat = catalog_mod.load(ctx.data)
-    print(f"Target: {ctx.os.get('PRETTY_NAME', 'unknown')}   (* = default, ! = not marked compatible)")
+    print(f"Target: {ctx.os.get('PRETTY_NAME', 'unknown')}   (* = default, ! = incompatible: hidden by restore)")
     for g in cat.groups:
         print(f"\n{g.id}  {g.name}")
         for i in g.items:
-            flag = ("*" if i.default else " ") + (" " if i.compatible(ctx.os) else "!")
-            print(f"  {flag} {i.id:<28} {i.name}")
+            ok = i.compatible(ctx.os)
+            flag = ("*" if i.default else " ") + (" " if ok else "!")
+            why = "" if ok else f"   ({i.why_incompatible(ctx.os)})"
+            print(f"  {flag} {i.id:<28} {i.name}{why}")
     if cat.known:
         print(f"\nknown (never restored): {', '.join(i.id for i in cat.known)}")
     return 0
@@ -170,7 +172,16 @@ def cmd_restore(args):
         if input("\nRun this plan? [y/N] ").strip().lower() not in ("y", "yes"):
             print("Nothing done.")
             return 1
-    return 0 if plan.execute(steps) else 1
+    finished, problems = plan.execute(steps, keep_going=args.keep_going)
+    if not finished:
+        return 1
+    return base.PARTIAL if problems else 0
+
+
+def cmd_apt_install(args):
+    """Internal: used by restore plans. Installs what it can, warns about the rest."""
+    skipped, failed = apt.install_packages(args.packages)
+    return base.PARTIAL if skipped or failed else 0
 
 
 # --- install-skill ---------------------------------------------------------
@@ -231,7 +242,13 @@ def main(argv=None):
     s.add_argument("--os-release", help="pretend the target is described by this os-release file")
     s.add_argument("--no-whiptail", action="store_true", help="use numbered text prompts")
     s.add_argument("--yes", "-y", action="store_true", help="do not ask before running the plan")
+    s.add_argument("--keep-going", action="store_true",
+                   help="never ask on a failure: skip the command and list it at the end")
     s.set_defaults(fn=cmd_restore)
+
+    s = sub.add_parser("apt-install", help=argparse.SUPPRESS)
+    s.add_argument("packages", nargs="+")
+    s.set_defaults(fn=cmd_apt_install)
 
     s = sub.add_parser("install-skill", help="link the /inventory skill into ~/.claude/skills")
     s.add_argument("--remove", action="store_true")

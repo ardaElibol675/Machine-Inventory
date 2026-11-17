@@ -72,6 +72,31 @@ class Compat(unittest.TestCase):
     def test_other_distro(self):
         self.assertFalse(compat_matches({"debian": ["12"]}, self.jammy))
 
+    def test_version_ranges(self):
+        resolute = read_os_release(FIXTURES / "ubuntu-26.04")
+        self.assertTrue(compat_matches({"ubuntu": [">=24.04"]}, self.noble))
+        self.assertTrue(compat_matches({"ubuntu": [">=24.04"]}, resolute))
+        self.assertFalse(compat_matches({"ubuntu": [">=24.04"]}, self.jammy))
+        self.assertTrue(compat_matches({"ubuntu": ["<=24.04"]}, self.jammy))
+        self.assertFalse(compat_matches({"ubuntu": ["<=24.04"]}, resolute))
+        self.assertTrue(compat_matches({"ubuntu": ["<26.04", "26.10"]}, self.noble))
+        self.assertFalse(compat_matches({"ubuntu": [">22.04"]}, self.jammy))
+
+
+class HardwareConditions(unittest.TestCase):
+    def test_requires_paths(self):
+        import tempfile
+        here = tempfile.gettempdir()
+        cat = parse({"groups": [{"id": "g", "items": [
+            {"id": "ok", "requires_paths": [here]},
+            {"id": "glob", "requires_paths": [here[:-1] + "*"]},
+            {"id": "missing", "requires_paths": ["/nonexistent/asus-nb-wmi"]}]}]})
+        jammy = read_os_release(FIXTURES / "ubuntu-22.04")
+        self.assertTrue(cat.item("ok").compatible(jammy))
+        self.assertTrue(cat.item("glob").compatible(jammy))
+        self.assertFalse(cat.item("missing").compatible(jammy))
+        self.assertIn("/nonexistent/asus-nb-wmi", cat.item("missing").why_incompatible(jammy))
+
 
 class ExampleFiles(unittest.TestCase):
     def test_example_config_keys_are_known(self):

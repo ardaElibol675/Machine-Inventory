@@ -85,7 +85,24 @@ The wizard hides items whose `compat` does not match the target system (`--inclu
 ./mi restore --dry-run --all-defaults --os-release tests/fixtures/ubuntu-24.04   # pretend another target
 ```
 
-The plan runs in this order: apt sources and keys → apt → snap → flatpak → VS Code → pip → git clones → dotfiles → systemd units → `/etc` files → dconf → post commands. Manual steps (downloads, licences) are printed at the end. Existing files that differ are kept as `<file>.bak-YYYYMMDD`. If a command fails, `mi` stops and asks: retry, skip, or abort. In Claude Code, `/inventory restore` walks you through the same flow and runs it only after you approve the plan.
+The plan runs in this order: apt sources and keys → apt → snap → flatpak → VS Code → pip → git clones → dotfiles → systemd units → `/etc` files → dconf → post commands. Manual steps (downloads, licences) are printed at the end. Existing files that differ are kept as `<file>.bak-YYYYMMDD`.
+
+Failures:
+- **Package installs never stop the run.** apt packages that the target's repositories do not have are skipped with a warning; if the rest fails as a batch, each package is tried on its own. A failing snap, flatpak, VS Code extension or pip package is skipped too. Everything skipped is listed at the end, and `mi restore` exits with code 3.
+- **Anything else** (adding a source, writing a config file, enabling a unit) makes `mi` stop and ask: retry, skip, or abort, because later steps may depend on it. `--keep-going` skips those as well, without asking.
+
+In Claude Code, `/inventory restore` walks you through the same flow and runs it only after you approve the plan.
+
+### Compatibility
+
+Items can say where they work, and the wizard hides the rest (`--include-incompatible` shows them):
+
+- `compat: {ubuntu: ["22.04", ">=26.04"]}` limits an item to releases: exact versions or ranges (`>=`, `<=`, `>`, `<`). Use it for apt sources that name a suite (`jammy`), packages that disappeared (`neofetch`), or settings that only make sense on one desktop version (X11-only setups, dconf dumps). Offer the newer alternative as its own item with the opposite range.
+- `requires_paths: [/sys/bus/platform/devices/asus-nb-wmi]` limits an item to hardware where every glob matches. Use it for laptop- or device-specific fixes.
+
+### systemd units are templates
+
+`mi export` saves your own units with your home directory replaced by `@HOME@` and `User=`/`Group=` lines naming you replaced by `@USER@`/`@GROUP@`. Restore fills these in for the user running it, so a unit pointing at `~/Services/app` works after a reinstall with a different username.
 
 ## Publishing
 

@@ -1,4 +1,11 @@
-"""systemd: your own unit files (system units no package owns, and user units)."""
+"""systemd: your own unit files (system units no package owns, and user units).
+
+Units are saved as templates, not as plain copies: your home directory becomes @HOME@ and
+`User=`/`Group=` lines naming you become @USER@/@GROUP@. Restore fills them in for the user
+running it, so a unit like `ExecStart=@HOME@/Services/app/run.sh` works for any username.
+"""
+import os
+import re
 from pathlib import Path
 
 from .. import shell
@@ -7,23 +14,58 @@ from .etc import dpkg_owned_etc
 
 SYSTEM_DIR = Path("/etc/systemd/system")
 SUFFIXES = (".service", ".timer", ".path")
+HOME, USER, GROUP = "@HOME@", "@USER@", "@GROUP@"
 
 
 def _user_dir(ctx):
     return ctx.home / ".config/systemd/user"
 
 
+def to_template(text, home, user, group):
+    """Replace this machine's home path and user/group names with placeholders."""
+    text = re.sub(rf"^User={re.escape(user)}\s*$", f"User={USER}", text, flags=re.M)
+    text = re.sub(rf"^Group={re.escape(group)}\s*$", f"Group={GROUP}", text, flags=re.M)
+    return re.sub(re.escape(str(home)) + r"(?=[/\s'\"]|$)", HOME, text, flags=re.M)
+
+
+def from_template(text, home, user, group):
+    return text.replace(HOME, str(home)).replace(USER, user).replace(GROUP, group)
+
+
+def _install_cmd(src, dst, sudo):
+    """Shell line that fills in the placeholders for the user running restore and writes dst."""
+    fill = (f"sed -e \"s|{HOME}|$HOME|g\" -e \"s|{USER}|$(id -un)|g\" -e \"s|{GROUP}|$(id -gn)|g\" {q(src)}")
+    if sudo:
+        return f"{fill} | sudo tee {q(dst)} >/dev/null"
+    return f"mkdir -p {q(dst.parent)} && {fill} > {q(dst)}"
+
+
 def collect(ctx, snap):
+    import grp
+    import pwd
+    user = pwd.getpwuid(os.getuid()).pw_name
+    group = grp.getgrgid(os.getgid()).gr_name
+
+    def save(f, rel):
+        text = f.read_text(encoding="utf-8", errors="replace")
+        snap.write(rel, to_template(text, ctx.home, user, group))
+
     owned = dpkg_owned_etc()
     for f in sorted(SYSTEM_DIR.glob("*")):
-        if f.suffix not in SUFFIXES or f.is_symlink() or not f.is_file():
-            continue
-        if f.name.startswith(("snap.", "snap-")) or str(f) in owned:
-            continue
-        snap.copy(f, f"systemd/system/{f.name}", mode=0o644)
+        if is_own_system_unit(f, owned):
+            save(f, f"systemd/system/{f.name}")
     for f in sorted(_user_dir(ctx).glob("*")):
         if f.suffix in (".service", ".timer") and f.is_file():
-            snap.copy(f, f"systemd/user/{f.name}", mode=0o644)
+            save(f, f"systemd/user/{f.name}")
+
+
+def is_own_system_unit(f, owned=None):
+    f = Path(f)
+    if f.parent != SYSTEM_DIR or f.suffix not in SUFFIXES or f.is_symlink() or not f.is_file():
+        return False
+    if f.name.startswith(("snap.", "snap-")):
+        return False
+    return str(f) not in (owned if owned is not None else dpkg_owned_etc())
 
 
 def saved(ctx):
@@ -100,9 +142,9 @@ def steps(ctx, catalog, items):
             scopes.add(scope)
             src = ctx.snapshot / "systemd" / entry
             if scope == "system":
-                cmds.append(f"sudo install -m 644 {q(src)} {q(SYSTEM_DIR / unit)}")
+                cmds.append(_install_cmd(src, SYSTEM_DIR / unit, sudo=True))
             else:
-                cmds.append(f"install -D -m 644 {q(src)} {q(_user_dir(ctx) / unit)}")
+                cmds.append(_install_cmd(src, _user_dir(ctx) / unit, sudo=False))
             if unit in expected_off:
                 notes.append(f"{unit}: disabled on purpose (expected_disabled); installed, not enabled")
             else:
@@ -114,5 +156,5 @@ def steps(ctx, catalog, items):
     cmds += enables
     if not (cmds or notes):
         return []
-    return [Step(PHASE_SYSTEMD, "systemd units", cmds, notes)]
+    return [Step(PHASE_SYSTEMD, "systemd units (@HOME@/@USER@ filled in for you)", cmds, notes)]
 

@@ -31,4 +31,4 @@ def steps(ctx, catalog, items):
     if not pkgs:
         return []
     return [Step(PHASE_PIP, f"pip --user packages ({len(pkgs)})",
-                 ["pip3 install --user " + " ".join(q(p) for p in pkgs)])]
+                 [f"pip3 install --user {q(p)}" for p in pkgs], soft=True)]

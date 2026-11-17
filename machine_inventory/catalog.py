@@ -6,6 +6,8 @@ Structure:
     config:      [item, ...]     offered as the group "config"
     known:       [item, ...]     seen on the machine, known, never restored
 """
+import glob
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,7 +18,7 @@ LIST_KEYS = (
     "apt_sources", "apt", "snap", "flatpak", "vscode", "pip",
     "gnome_extensions", "dconf", "dotfiles", "systemd", "etc", "repos", "post",
 )
-SCALAR_KEYS = ("id", "name", "why", "notes", "manual", "default", "compat")
+SCALAR_KEYS = ("id", "name", "why", "notes", "manual", "default", "compat", "requires_paths")
 SOURCE_KEYS = ("file", "line", "keyring", "key_url")
 CONFIG_GROUP = "config"
 
@@ -35,13 +37,21 @@ class Item:
     manual: str = ""
     default: bool = False
     compat: dict = field(default_factory=dict)
+    requires_paths: list = field(default_factory=list)
     lists: dict = field(default_factory=dict)
 
     def get(self, key):
         return self.lists.get(key, [])
 
     def compatible(self, os_info):
-        return compat_matches(self.compat, os_info)
+        """Matches the target release (compat) and the hardware (requires_paths) of this machine."""
+        return compat_matches(self.compat, os_info) and paths_present(self.requires_paths)
+
+    def why_incompatible(self, os_info):
+        if not compat_matches(self.compat, os_info):
+            return "release " + ", ".join(f"{d} {' '.join(v) or 'any'}" for d, v in self.compat.items())
+        missing = [p for p in self.requires_paths if not glob.glob(p)]
+        return f"missing {', '.join(missing)}" if missing else ""
 
 
 @dataclass
@@ -78,11 +88,28 @@ class Catalog:
         return {v for i in items for v in i.get(key)}
 
 
+def _version(v):
+    return tuple(int(x) for x in re.findall(r"\d+", str(v)))
+
+
+def _version_matches(spec, version):
+    """spec: "22.04", ">=24.04", "<=24.04", ">22.04" or "<26.04"."""
+    m = re.match(r"^(>=|<=|>|<)?\s*(.+)$", str(spec).strip())
+    op, want = m.group(1), m.group(2)
+    if not op:
+        return str(version) == want
+    have, want = _version(version), _version(want)
+    if not have:
+        return False
+    return {">=": have >= want, "<=": have <= want, ">": have > want, "<": have < want}[op]
+
+
 def compat_matches(compat, os_info):
-    """compat: {ubuntu: ["22.04"], debian: ["12"]}. Empty means "works everywhere".
+    """compat: {ubuntu: ["22.04", ">=26.04"], debian: ["12"]}. Empty means "works everywhere".
 
     A distro listed without versions (ubuntu: []) matches any version of it.
-    ID_LIKE is honoured, so `ubuntu` also matches Ubuntu derivatives.
+    ID_LIKE is honoured, so `ubuntu: []` also matches Ubuntu derivatives; versions are only
+    compared against the distro itself.
     """
     if not compat:
         return True
@@ -92,9 +119,14 @@ def compat_matches(compat, os_info):
         if distro in ids:
             if not versions:
                 return True
-            if distro == os_info.get("ID") and version in [str(v) for v in versions]:
+            if distro == os_info.get("ID") and any(_version_matches(v, version) for v in versions):
                 return True
     return False
+
+
+def paths_present(patterns):
+    """Hardware conditions: every glob must match something on this machine."""
+    return all(glob.glob(p) for p in patterns)
 
 
 def _as_list(value, where):
@@ -126,6 +158,7 @@ def _item(raw, group, where):
         manual=str(raw.get("manual") or ""),
         default=bool(raw.get("default", False)),
         compat=compat,
+        requires_paths=_as_list(raw.get("requires_paths"), f"{where} '{raw['id']}' requires_paths"),
         lists={k: _as_list(raw.get(k), f"{where} '{raw['id']}' {k}") for k in LIST_KEYS if raw.get(k)},
     )
 

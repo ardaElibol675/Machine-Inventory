@@ -2,6 +2,7 @@
 import subprocess
 
 from .modules import each
+from .modules.base import PARTIAL
 
 
 class SelectionError(ValueError):
@@ -56,8 +57,8 @@ def select(catalog, os_info, tokens=None, all_defaults=False, include_incompatib
         if i is None or i.group == "known":
             raise SelectionError(f"unknown group or item: {tok}")
         if not i.compatible(os_info) and not include_incompatible:
-            warnings.append(f"skipped '{tok}': not marked compatible with this system "
-                            f"(use --include-incompatible to install it anyway)")
+            warnings.append(f"skipped '{tok}': incompatible with this system ({i.why_incompatible(os_info)}); "
+                            f"use --include-incompatible to install it anyway")
             continue
         add(i)
     # Keep catalog order, so the plan reads like the catalog.
@@ -75,9 +76,9 @@ def build(ctx, catalog, items):
 def describe(steps, items, os_info):
     name = os_info.get("PRETTY_NAME") or "unknown system"
     out = [f"Target system: {name}", f"Selected items ({len(items)}): " + ", ".join(i.id for i in items), ""]
-    untested = [i.id for i in items if not i.compatible(os_info)]
-    if untested:
-        out += [f"Not tested on this system: {', '.join(untested)}", ""]
+    bad = [f"{i.id} ({i.why_incompatible(os_info)})" for i in items if not i.compatible(os_info)]
+    if bad:
+        out += [f"Incompatible with this system, installed anyway: {', '.join(bad)}", ""]
     n = 0
     for s in steps:
         if s.manual:
@@ -95,22 +96,39 @@ def describe(steps, items, os_info):
     return "\n".join(out)
 
 
-def execute(steps, ask=input, out=print):
-    """Run every command. On failure ask: retry, skip, or abort. Returns True if finished."""
+def execute(steps, ask=input, out=print, keep_going=False, run=None):
+    """Run every command. Returns (finished, problems).
+
+    A soft step (package installs) records a failure and moves on. Any other failure asks
+    retry / skip / abort, unless keep_going is set. A command exiting with PARTIAL finished
+    but skipped some of its work; it is recorded too.
+    """
+    run = run or (lambda c: subprocess.run(["bash", "-c", c]).returncode)
+    problems = []
     for s in [s for s in steps if not s.manual]:
         out(f"\n=== {s.title}")
         for c in s.commands:
             while True:
                 out(f"  + {c}")
-                rc = subprocess.run(["bash", "-c", c]).returncode
+                rc = run(c)
                 if rc == 0:
                     break
+                if rc == PARTIAL:
+                    problems.append(f"{s.title}: some packages were skipped (see the warnings above)")
+                    break
                 out(f"  FAILED (exit {rc}): {c}")
+                if s.soft or keep_going:
+                    problems.append(f"{s.title}: failed and skipped: {c}")
+                    break
                 a = ask("  [r]etry, [s]kip, [a]bort? ").strip().lower()
                 if a.startswith("r"):
                     continue
                 if a.startswith("s"):
+                    problems.append(f"{s.title}: skipped: {c}")
                     break
                 out("Aborted.")
-                return False
-    return True
+                return False, problems
+    if problems:
+        out("\nFinished with problems:")
+        out("\n".join(f"  - {p}" for p in problems))
+    return True, problems

@@ -3,7 +3,8 @@ import unittest
 from contextlib import redirect_stdout
 
 from machine_inventory import catalog, cli, plan, ui
-from machine_inventory.modules import apt
+from machine_inventory.modules import apt, systemd
+from machine_inventory.modules.base import PARTIAL, Step
 from machine_inventory.modules.base import PHASE_APT, PHASE_MANUAL, PHASE_POST, PHASE_SOURCES
 from tests.helpers import FIXTURES, ctx_for, make_data
 
@@ -70,7 +71,7 @@ class Steps(unittest.TestCase):
     def test_only_selected_things(self):
         steps = self.build("build-tools")
         text = "\n".join(c for s in steps for c in s.commands)
-        self.assertIn("sudo apt install -y build-essential cmake ninja-build pkg-config", text)
+        self.assertIn("apt-install build-essential cmake ninja-build pkg-config", text)
         self.assertNotIn("code", text)
         self.assertNotIn("sources.list.d", text)
 
@@ -112,6 +113,93 @@ class Steps(unittest.TestCase):
                          ["deb [arch=amd64 signed-by=/k.gpg] http://x jammy main"])
         self.assertEqual(apt._rewrite_signed_by("# comment\ndeb [signed-by=/a] http://x y z", "/k"),
                          ["# comment", "deb [signed-by=/a] http://x y z"])
+
+
+class AptInstall(unittest.TestCase):
+    def run_install(self, pkgs, known, broken=()):
+        calls = []
+
+        def run(args):
+            calls.append(args[4:])
+            return 1 if any(p in broken for p in args[4:]) else 0
+        skipped, failed = apt.install_packages(pkgs, run=run, out=lambda _: None,
+                                               locate=lambda ps: None if known is None else set(known) & set(ps))
+        return skipped, failed, calls
+
+    def test_unknown_packages_are_skipped_not_fatal(self):
+        skipped, failed, calls = self.run_install(["a", "neofetch", "b"], known=["a", "b"])
+        self.assertEqual((skipped, failed), (["neofetch"], []))
+        self.assertEqual(calls, [["a", "b"]])
+
+    def test_batch_failure_falls_back_to_one_by_one(self):
+        skipped, failed, calls = self.run_install(["a", "bad", "b"], known=["a", "bad", "b"], broken=["bad"])
+        self.assertEqual(failed, ["bad"])
+        self.assertEqual(calls, [["a", "bad", "b"], ["a"], ["bad"], ["b"]])
+
+    def test_unreadable_lists_still_install(self):
+        skipped, failed, calls = self.run_install(["a"], known=None)
+        self.assertEqual((skipped, failed, calls), ([], [], [["a"]]))
+
+
+class Execute(unittest.TestCase):
+    def test_soft_failures_and_partial_do_not_stop_the_run(self):
+        steps = [Step(20, "apt packages", ["apt-ok"], soft=True),
+                 Step(30, "snaps", ["snap-bad", "snap-ok"], soft=True),
+                 Step(40, "partial", ["half"])]
+        codes = {"apt-ok": 0, "snap-bad": 1, "snap-ok": 0, "half": PARTIAL}
+        ran = []
+        finished, problems = plan.execute(steps, ask=lambda _: self.fail("must not ask"),
+                                          out=lambda _: None, run=lambda c: ran.append(c) or codes[c])
+        self.assertTrue(finished)
+        self.assertEqual(ran, ["apt-ok", "snap-bad", "snap-ok", "half"])
+        self.assertEqual(len(problems), 2)
+
+    def test_hard_failure_asks_and_can_abort(self):
+        steps = [Step(10, "sources", ["bad", "never"])]
+        ran = []
+        finished, _ = plan.execute(steps, ask=lambda _: "a", out=lambda _: None,
+                                   run=lambda c: ran.append(c) or 1)
+        self.assertFalse(finished)
+        self.assertEqual(ran, ["bad"])
+
+    def test_keep_going_never_asks(self):
+        steps = [Step(10, "sources", ["bad", "next"])]
+        finished, problems = plan.execute(steps, ask=lambda _: self.fail("must not ask"), out=lambda _: None,
+                                          keep_going=True, run=lambda c: 1 if c == "bad" else 0)
+        self.assertTrue(finished)
+        self.assertEqual(len(problems), 1)
+
+
+class UnitTemplates(unittest.TestCase):
+    UNIT = ("[Service]\nUser=alice\nGroup=staff\nWorkingDirectory=/srv/users/alice/app\n"
+            "ExecStart=/srv/users/alice/app/run.sh --data '/srv/users/alice'\nEnvironment=X=/srv/users/alice2/keep\n")
+
+    def test_round_trip_for_another_user(self):
+        t = systemd.to_template(self.UNIT, "/srv/users/alice", "alice", "staff")
+        self.assertNotIn("/srv/users/alice/", t)
+        self.assertIn("User=@USER@", t)
+        self.assertIn("ExecStart=@HOME@/app/run.sh --data '@HOME@'", t)
+        self.assertIn("/srv/users/alice2/keep", t)            # another user's path is left alone
+        out = systemd.from_template(t, "/srv/users/bob", "bob", "bob")
+        self.assertIn("WorkingDirectory=/srv/users/bob/app", out)
+        self.assertIn("User=bob", out)
+
+    def test_root_user_is_not_templated(self):
+        t = systemd.to_template("User=root\n", "/srv/users/alice", "alice", "alice")
+        self.assertEqual(t, "User=root\n")
+
+    def test_restore_command_fills_placeholders(self):
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: subprocess.run(["rm", "-rf", str(d)]))
+        (d / "u.service").write_text("ExecStart=@HOME@/x\nUser=@USER@\n")
+        cmd = systemd._install_cmd(d / "u.service", d / "out/u.service", sudo=False)
+        subprocess.run(["bash", "-c", cmd], check=True)
+        text = (d / "out/u.service").read_text()
+        self.assertIn(f"ExecStart={Path.home()}/x", text)
+        self.assertNotIn("@", text)
 
 
 class TextWizard(unittest.TestCase):

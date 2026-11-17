@@ -259,8 +259,49 @@ def steps(ctx, catalog, items):
             if p not in exclude and p not in pkgs:
                 pkgs.append(p)
     if pkgs or cmds:
-        c = ["sudo apt update"]
-        if pkgs:
-            c.append("sudo apt install -y " + " ".join(pkgs))
-        out.append(Step(PHASE_APT, f"apt packages ({len(pkgs)})", c))
+        out.append(Step(PHASE_APT, "apt update", ["sudo apt update"]))
+    if pkgs:
+        out.append(Step(PHASE_APT, f"apt packages ({len(pkgs)})",
+                        [f"{q(ctx.tool_root / 'mi')} apt-install " + " ".join(q(p) for p in pkgs)],
+                        ["packages missing from this system's repositories are skipped with a warning; "
+                         "if the batch fails, the rest are installed one by one"],
+                        soft=True))
     return out
+
+
+def located(pkgs):
+    """The subset of `pkgs` that apt knows at all, or None if apt's lists cannot be read.
+
+    `apt-cache policy` prints a "name:" block for every package it knows (virtual packages
+    included) and nothing for unknown names.
+    """
+    out = shell.run(["apt-cache", "policy", *pkgs], check=False)
+    if out is None:
+        return None
+    known = {l[:-1] for l in out.splitlines() if l and not l[0].isspace() and l.endswith(":")}
+    return {p for p in pkgs if p in known}
+
+
+def install_packages(pkgs, run=None, out=print, locate=located):
+    """Install as many of `pkgs` as possible. Returns (skipped, failed).
+
+    Unknown packages are skipped up front. If the remaining batch fails, every package is
+    tried on its own, so one broken package never costs the whole list.
+    """
+    import subprocess
+    run = run or (lambda args: subprocess.run(args).returncode)
+    known = locate(pkgs)
+    skipped = [] if known is None else [p for p in pkgs if p not in known]
+    for p in skipped:
+        out(f"WARN   {p}: not in this system's apt repositories; skipped")
+    todo = [p for p in pkgs if p not in skipped]
+    failed = []
+    if todo and run(["sudo", "apt", "install", "-y", *todo]) != 0:
+        out("WARN   installing the batch failed; trying the packages one by one")
+        for p in todo:
+            if run(["sudo", "apt", "install", "-y", p]) != 0:
+                failed.append(p)
+                out(f"WARN   {p}: could not be installed; skipped")
+    installed = len(todo) - len(failed)
+    out(f"apt: {installed} installed or already present, {len(skipped)} not found, {len(failed)} failed")
+    return skipped, failed

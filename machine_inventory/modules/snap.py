@@ -51,4 +51,4 @@ def drift(ctx, catalog, rep):
 def steps(ctx, catalog, items):
     # An entry may carry flags: "code --classic".
     cmds = [f"sudo snap install {s}" for i in items for s in i.get("snap")]
-    return [Step(PHASE_SNAP, f"snaps ({len(cmds)})", cmds)] if cmds else []
+    return [Step(PHASE_SNAP, f"snaps ({len(cmds)})", cmds, soft=True)] if cmds else []

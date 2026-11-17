@@ -55,7 +55,7 @@ def wizard(catalog, os_info, include_incompatible=False, use_whiptail=None, **kw
             continue
         entries = []
         for i in items:
-            label = i.name + ("" if i.compatible(os_info) else "  [not tested here]")
+            label = i.name + ("" if i.compatible(os_info) else f"  [incompatible: {i.why_incompatible(os_info)}]")
             entries.append((i.id, label, i.default and i.compatible(os_info)))
         sel = checklist(g.name, "Which items?", entries, use_whiptail, **kw)
         if sel is None:

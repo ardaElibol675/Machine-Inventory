@@ -6,9 +6,9 @@ SHOWN = [k for k in LIST_KEYS if k not in ("post",)]
 
 
 def _compat(item):
-    if not item.compat:
-        return "any"
-    return "; ".join(f"{d} {', '.join(v) if v else '(any)'}" for d, v in item.compat.items())
+    parts = [f"{d} {', '.join(v) if v else '(any)'}" for d, v in item.compat.items()]
+    parts += [f"needs {p}" for p in item.requires_paths]
+    return _cell("; ".join(parts)) or "any"
 
 
 def _cell(text):

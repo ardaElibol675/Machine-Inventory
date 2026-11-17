@@ -30,4 +30,4 @@ def steps(ctx, catalog, items):
     if not exts:
         return []
     return [Step(PHASE_VSCODE, f"VS Code extensions ({len(exts)})",
-                 [f"code --install-extension {q(e)}" for e in exts])]
+                 [f"code --install-extension {q(e)}" for e in exts], soft=True)]
