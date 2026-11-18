@@ -91,6 +91,51 @@ def keyrings_of(text):
     return [a or b for a, b in SIGNED_BY.findall(text)]
 
 
+def suites_of(text):
+    """Suites named by a one-line (.list) or deb822 (.sources) source, e.g. ['jammy', 'stable']."""
+    out = []
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith(("deb ", "deb-src ")):
+            rest = s.split(None, 1)[1]
+            if rest.startswith("["):
+                rest = rest.split("]", 1)[1]
+            f = rest.split()
+            if len(f) >= 2:
+                out.append(f[1])
+        elif s.lower().startswith("suites:"):
+            out += s.split(":", 1)[1].split()
+    return list(dict.fromkeys(out))
+
+
+def saved_source(ctx, name):
+    """Path of a saved source file in the snapshot (it may not exist)."""
+    return ctx.snapshot / "apt-sources" / name
+
+
+def saved_keyring(ctx, keyring):
+    """Path of a saved keyring in the snapshot (it may not exist)."""
+    return ctx.snapshot / "apt-sources" / ("keyrings" + keyring)
+
+
+def source_payload(ctx, source):
+    """[(snapshot path, why)] that restoring this apt_sources entry reads from the snapshot."""
+    out = []
+    if source.get("keyring") and not source.get("key_url"):
+        out.append((saved_keyring(ctx, source["keyring"]), f"keyring {source['keyring']}"))
+    if source.get("file") and not source.get("line"):
+        out.append((saved_source(ctx, source["file"]), source["file"]))
+    return out
+
+
+def source_text(ctx, source):
+    """The entry as apt will see it: the literal line, or the saved file ('' if missing)."""
+    if source.get("line"):
+        return source["line"]
+    path = saved_source(ctx, source["file"])
+    return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+
+
 # --- collect ---------------------------------------------------------------
 
 def collect(ctx, snap):
@@ -215,7 +260,6 @@ def _rewrite_signed_by(text, keyring):
 
 def steps(ctx, catalog, items):
     out = []
-    src_dir = ctx.snapshot / "apt-sources"
     source_ids = []
     for i in items:
         for s in i.get("apt_sources"):
@@ -229,7 +273,7 @@ def steps(ctx, catalog, items):
         if s.get("key_url"):
             cmds.append(f"curl -fsSL {q(s['key_url'])} | sudo tee {q(keyring)} >/dev/null")
         elif keyring:
-            saved = src_dir / ("keyrings" + keyring)
+            saved = saved_keyring(ctx, keyring)
             if saved.exists():
                 cmds.append(f"sudo install -D -m 644 {q(saved)} {q(keyring)}")
             else:
@@ -240,7 +284,7 @@ def steps(ctx, catalog, items):
             lines = _rewrite_signed_by(s["line"], keyring) if keyring else [s["line"]]
         else:
             name = s["file"]
-            path = src_dir / name
+            path = saved_source(ctx, name)
             if not path.exists():
                 notes.append(f"{sid}: {name} is not in the snapshot; skipped")
                 continue

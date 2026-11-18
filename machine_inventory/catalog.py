@@ -1,24 +1,30 @@
-"""data/catalog.yaml: what the user wants on a machine, and why.
+"""catalog.yaml (in inventory/ or a migration target): what the user wants on a machine, and why.
 
 Structure:
     apt_sources: {id: {file|line, keyring, key_url}}
     groups:      [{id, name, items: [item, ...]}]
     config:      [item, ...]     offered as the group "config"
     known:       [item, ...]     seen on the machine, known, never restored
+
+`replaces: [ids]` marks an item as the alternative of other items (for example the
+Ubuntu-archive build of an app whose upstream repository only exists for an older release).
+`mi migrate init` uses it to decide incompatible items automatically.
 """
 import glob
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .config import load_yaml
+import yaml
+
+from .config import is_migration, load_yaml
 
 # Item keys that hold lists of things to install or restore.
 LIST_KEYS = (
     "apt_sources", "apt", "snap", "flatpak", "vscode", "pip",
     "gnome_extensions", "dconf", "dotfiles", "systemd", "etc", "repos", "post",
 )
-SCALAR_KEYS = ("id", "name", "why", "notes", "manual", "default", "compat", "requires_paths")
+SCALAR_KEYS = ("id", "name", "why", "notes", "manual", "default", "compat", "requires_paths", "replaces")
 SOURCE_KEYS = ("file", "line", "keyring", "key_url")
 CONFIG_GROUP = "config"
 
@@ -38,6 +44,7 @@ class Item:
     default: bool = False
     compat: dict = field(default_factory=dict)
     requires_paths: list = field(default_factory=list)
+    replaces: list = field(default_factory=list)
     lists: dict = field(default_factory=dict)
 
     def get(self, key):
@@ -159,11 +166,14 @@ def _item(raw, group, where):
         default=bool(raw.get("default", False)),
         compat=compat,
         requires_paths=_as_list(raw.get("requires_paths"), f"{where} '{raw['id']}' requires_paths"),
+        replaces=_as_list(raw.get("replaces"), f"{where} '{raw['id']}' replaces"),
         lists={k: _as_list(raw.get(k), f"{where} '{raw['id']}' {k}") for k in LIST_KEYS if raw.get(k)},
     )
 
 
-def parse(data):
+def parse(data, strict_refs=True):
+    """strict_refs: every `replaces` id must exist in this catalog. A migration target's
+    catalog names inventory items it does not contain, so it is parsed with strict_refs=False."""
     sources = data.get("apt_sources") or {}
     for sid, s in sources.items():
         if not isinstance(s, dict) or not (s.get("file") or s.get("line")):
@@ -199,6 +209,12 @@ def parse(data):
     clash = set(gids) & seen
     if clash:
         raise CatalogError(f"ids used for both a group and an item: {', '.join(sorted(clash))}")
+    for i in [i for g in groups for i in g.items]:
+        if i.id in i.replaces:
+            raise CatalogError(f"item '{i.id}': replaces itself")
+        missing = [r for r in i.replaces if r not in seen]
+        if strict_refs and missing:
+            raise CatalogError(f"item '{i.id}': replaces unknown items: {', '.join(missing)}")
     return Catalog(apt_sources=sources, groups=groups, known=known)
 
 
@@ -207,6 +223,92 @@ def load(data_dir):
     if not path.exists():
         raise SystemExit(f"{path} not found. Run `./mi init` first.")
     try:
-        return parse(load_yaml(path))
+        return parse(load_yaml(path), strict_refs=not is_migration(data_dir))
     except CatalogError as e:
         raise SystemExit(f"{path}: {e}")
+
+
+# --- writing ---------------------------------------------------------------
+
+class _Dumper(yaml.SafeDumper):
+    """Readable YAML: multi-line strings as | blocks, short lists and mappings on one line."""
+
+    def increase_indent(self, flow=False, indentless=False):
+        return super().increase_indent(flow, False)          # indent lists under their key
+
+    def ignore_aliases(self, data):
+        return True                                          # never write &anchors / *aliases
+
+
+def _str(dumper, value):
+    style = "|" if "\n" in value else None
+    return dumper.represent_scalar("tag:yaml.org,2002:str", value, style=style)
+
+
+def _seq(dumper, value):
+    flow = all(isinstance(v, (str, int, float, bool)) and "\n" not in str(v) for v in value)
+    return dumper.represent_sequence("tag:yaml.org,2002:seq", value, flow_style=flow)
+
+
+class _Flow(dict):
+    """A mapping written on one line (compat, apt sources)."""
+
+
+_Dumper.add_representer(str, _str)
+_Dumper.add_representer(list, _seq)
+_Dumper.add_representer(_Flow, lambda d, v: d.represent_mapping("tag:yaml.org,2002:map", v, flow_style=True))
+
+
+def item_dict(item):
+    """Item -> the mapping it was parsed from (empty keys left out)."""
+    out = {"id": item.id}
+    if item.name and item.name != item.id:
+        out["name"] = item.name
+    if item.why:
+        out["why"] = item.why
+    if item.replaces:
+        out["replaces"] = list(item.replaces)
+    for k in LIST_KEYS:
+        if item.get(k):
+            out[k] = list(item.get(k))
+    if item.compat:
+        out["compat"] = _Flow({d: list(v) for d, v in item.compat.items()})
+    if item.requires_paths:
+        out["requires_paths"] = list(item.requires_paths)
+    if item.default:
+        out["default"] = True
+    if item.notes:
+        out["notes"] = item.notes
+    if item.manual:
+        out["manual"] = item.manual
+    return out
+
+
+def to_dict(cat):
+    out = {}
+    if cat.apt_sources:
+        out["apt_sources"] = {sid: _Flow(s) for sid, s in cat.apt_sources.items()}
+    groups = [g for g in cat.groups if g.id != CONFIG_GROUP]
+    if groups:
+        out["groups"] = [{"id": g.id, "name": g.name, "items": [item_dict(i) for i in g.items]} for g in groups]
+    config = cat.group(CONFIG_GROUP)
+    if config and config.items:
+        out["config"] = [item_dict(i) for i in config.items]
+    if cat.known:
+        out["known"] = [item_dict(i) for i in cat.known]
+    return out
+
+
+def yaml_text(obj, header=""):
+    """Any data -> YAML text in the same style as dump(), with an optional # header."""
+    body = yaml.dump(obj, Dumper=_Dumper, sort_keys=False, allow_unicode=True, width=110)
+    head = "".join(f"# {l}\n" if l else "#\n" for l in header.splitlines())
+    return head + ("\n" if head else "") + body
+
+
+Flow = _Flow
+
+
+def dump(cat, header=""):
+    """Catalog -> catalog.yaml text. parse(yaml.safe_load(dump(cat))) gives the same catalog."""
+    return yaml_text(to_dict(cat), header)

@@ -1,4 +1,4 @@
-"""Builds a throw-away data directory from examples/data plus a tiny fake snapshot."""
+"""Builds a throw-away data directory from examples/inventory plus a tiny fake snapshot."""
 import shutil
 import tempfile
 from pathlib import Path
@@ -24,6 +24,8 @@ def make_data(test):
         "dotfiles/.config/Code/User/settings.json": "{}\n",
         "etc/files/systemd/resolved.conf.d/dot.conf": "[Resolve]\n",
         "repos.tsv": "~/Projects/demo\thttps://git.example.com/demo.git\tmain\t0\t0\n",
+        "system.txt": 'PRETTY_NAME="Ubuntu 22.04.5 LTS"\nID="ubuntu"\nVERSION_ID="22.04"\n'
+                      'KERNEL="6.8.0-1-generic"\nARCH="x86_64"\n',
     }
     for rel, text in files.items():
         p = snap / rel

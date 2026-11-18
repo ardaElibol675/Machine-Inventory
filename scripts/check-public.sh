@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
-# Fails if personal data leaked into the public tool repo (everything outside data/):
+# Fails if personal data leaked into the public tool repo (everything outside your private
+# inventory/ and migration/ repos):
 #   - home directory paths  (/home/<name>/...)
 #   - your username, git name and git email
 #   - email addresses (example.com/org and noreply addresses are allowed)
-#   - every word in data/config.yaml `private_terms`
+#   - every word in inventory/config.yaml `private_terms`
 # Usage: scripts/check-public.sh        exit 0 = clean, 1 = something found
 set -uo pipefail
 cd "$(dirname "$(readlink -f "$0")")/.."
 
-mapfile -d '' files < <(find . -path ./data -prune -o -path ./.git -prune -o -name __pycache__ -prune \
+mapfile -d '' files < <(find . \( -path ./inventory -o -path ./migration -o -path ./data \) -prune -o -path ./.git -prune -o -name __pycache__ -prune \
   -o -type f -print0)
 
 terms=("$(id -un)")
 for k in user.name user.email; do v="$(git config --get "$k" 2>/dev/null)" && [ -n "$v" ] && terms+=("$v"); done
-if [ -f data/config.yaml ]; then
+if [ -f inventory/config.yaml ]; then
   mapfile -t extra < <(python3 -c 'import sys, yaml
-c = yaml.safe_load(open("data/config.yaml")) or {}
+c = yaml.safe_load(open("inventory/config.yaml")) or {}
 print("\n".join(str(t) for t in c.get("private_terms") or []))')
   terms+=("${extra[@]}")
 fi
@@ -37,6 +38,6 @@ for t in "${terms[@]}"; do
 done
 
 if [ "$found" = 0 ]; then
-  echo "OK    no personal data found in ${#files[@]} files outside data/"
+  echo "OK    no personal data found in ${#files[@]} files outside inventory/ and migration/"
 fi
 exit "$found"

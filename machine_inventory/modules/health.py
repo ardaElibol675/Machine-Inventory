@@ -1,4 +1,4 @@
-"""General health: disk usage, home layout, state of the tool and data repositories."""
+"""General health: disk usage, home layout, state of the tool and inventory repositories."""
 import os
 
 from .. import shell
@@ -44,9 +44,9 @@ def check(ctx, rep):
             rep.ok("home layout: tidy")
 
     rep.section("inventory repositories")
-    _git_state(rep, ctx.tool_root, "tool repo", "see README: Publishing")
+    _git_state(rep, ctx.tool_root, "tool repo", "see README")
     if ctx.data.exists():
-        _git_state(rep, ctx.data, "data repo", "cd data && git init")
+        _git_state(rep, ctx.data, "inventory repo", f"cd {ctx.data.name} && git init")
 
 
 def steps(ctx, catalog, items):

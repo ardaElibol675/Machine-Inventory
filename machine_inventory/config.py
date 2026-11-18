@@ -1,8 +1,9 @@
-"""Tool paths and the user's data/config.yaml.
+"""Tool paths and the user's inventory/config.yaml.
 
 The tool never contains an absolute path: the tool root is found from this file's
-location, data always lives in <tool root>/data (overridable with --data for tests),
-and user paths are written with ~ and expanded at run time.
+location, the inventory lives in <tool root>/inventory (overridable with --data),
+migration targets live in <tool root>/migration/<name>, and user paths are written
+with ~ and expanded at run time.
 """
 import copy
 import os
@@ -11,8 +12,13 @@ from pathlib import Path
 import yaml
 
 TOOL_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_DATA = TOOL_ROOT / "data"
-EXAMPLES = TOOL_ROOT / "examples" / "data"
+DEFAULT_DATA = TOOL_ROOT / "inventory"
+LEGACY_DATA = TOOL_ROOT / "data"            # the inventory's name before it was renamed
+MIGRATION_ROOT = TOOL_ROOT / "migration"
+EXAMPLES = TOOL_ROOT / "examples" / "inventory"
+# A data directory holding this file is a migration target (payload for another release), not facts.
+MIGRATION_FILE = "migration.yaml"
+TARGET_OS_RELEASE = "target-os-release"
 
 DEFAULTS = {
     # Allowed top-level entries in $HOME. Empty list disables the check.
@@ -87,15 +93,39 @@ def load_config(data_dir):
     return _merge(DEFAULTS, user)
 
 
+def default_data():
+    if not DEFAULT_DATA.exists() and LEGACY_DATA.exists():
+        raise SystemExit(f"{LEGACY_DATA} was renamed to {DEFAULT_DATA.name}/. Rename the folder "
+                         f"(its git repository and remote are not affected):\n"
+                         f"    mv {LEGACY_DATA} {DEFAULT_DATA}")
+    return DEFAULT_DATA
+
+
+def migration_dir(name):
+    """A migration target by name (<tool>/migration/<name>) or by path (anything with a /)."""
+    return Path(name) if "/" in str(name) else MIGRATION_ROOT / name
+
+
+def is_migration(data_dir):
+    return (Path(data_dir) / MIGRATION_FILE).exists()
+
+
 class Context:
-    """Everything a module needs: config, data paths, and the target system description."""
+    """Everything a module needs: config, data paths, and the target system description.
+
+    In a migration target the target system defaults to its target-os-release, so
+    `catalog`, `render` and `restore --dry-run` judge items against the release it is for.
+    """
 
     def __init__(self, data_dir=None, os_release=None):
         self.tool_root = TOOL_ROOT
-        self.data = Path(data_dir) if data_dir else DEFAULT_DATA
+        self.data = Path(data_dir) if data_dir else default_data()
         self.cfg = load_config(self.data)
         self.snapshot = self.data / "snapshot"
         self.home = Path.home()
+        self.migration = is_migration(self.data)
+        if not os_release and self.migration and (self.data / TARGET_OS_RELEASE).exists():
+            os_release = str(self.data / TARGET_OS_RELEASE)
         self.os_release_path = os_release or "/etc/os-release"
         self._os = None
 

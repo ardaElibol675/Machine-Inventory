@@ -1,4 +1,9 @@
-# Your private data repo lives here; it has its own git repository.
+# Your private repos live here; each has its own git repository.
+/inventory/
+/migration/
+# Old name of inventory/ (rename it: mv data inventory)
 /data/
 __pycache__/
 *.pyc
+# Local working plan for the next change
+PLAN.md

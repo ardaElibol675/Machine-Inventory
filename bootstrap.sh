@@ -19,13 +19,21 @@ else
 fi
 
 cd "$(dirname "$(readlink -f "$0")")"
-if [ ! -d data ]; then
-  echo
-  echo "No data/ directory yet. Either clone your private data repo:"
-  echo "    git clone <your-private-data-repo> data"
+echo
+if [ -d data ] && [ ! -d inventory ]; then
+  echo "data/ was renamed to inventory/. Rename it (its git repository is not affected):"
+  echo "    mv data inventory"
+elif [ -d migration ]; then
+  echo "Migration targets found:"
+  for d in migration/*/; do [ -f "$d/migration.yaml" ] && echo "    $(basename "$d")"; done
+  echo "Next: ./mi --migration <target> restore --dry-run    (then the same without --dry-run)"
+elif [ -d inventory ]; then
+  echo "Next: ./mi restore --dry-run    (then ./mi restore)"
+else
+  echo "No inventory/ directory yet. Either clone your private inventory repo:"
+  echo "    git clone <your-inventory-repo> inventory"
   echo "or start a new one:"
   echo "    ./mi init"
-else
-  echo
-  echo "Next: ./mi restore --dry-run    (then ./mi restore)"
+  echo "Moving to another release? Clone your migration repo instead:"
+  echo "    git clone <your-migration-repo> migration"
 fi

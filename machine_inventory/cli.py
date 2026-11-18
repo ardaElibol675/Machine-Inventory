@@ -7,8 +7,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import __version__, catalog as catalog_mod, plan, ui
-from .config import EXAMPLES, Context
+from . import __version__, catalog as catalog_mod, migrate, plan, ui
+from .config import EXAMPLES, MIGRATION_FILE, MIGRATION_ROOT, TOOL_ROOT, Context, default_data, migration_dir
 from .modules import apt, base, each
 from .render import render
 
@@ -19,13 +19,22 @@ def _ctx(args):
 
 def _require_data(ctx):
     if not ctx.data.exists():
-        raise SystemExit(f"{ctx.data} does not exist. Clone your data repo there, or run `./mi init`.")
+        raise SystemExit(f"{ctx.data} does not exist. Clone your inventory repo there, or run `./mi init`.")
+
+
+def _refuse_migration(ctx, what):
+    """export/check describe this machine; a migration target holds payload for another release."""
+    if ctx.migration:
+        raise SystemExit(f"{ctx.data} is a migration target ({MIGRATION_FILE}): it holds the payload for "
+                         f"another release, not facts about this machine, so `mi {what}` does not apply. "
+                         f"Use `mi migrate check {ctx.data.name}`.")
 
 
 # --- init ------------------------------------------------------------------
 
 def cmd_init(args):
     ctx = _ctx(args)
+    _refuse_migration(ctx, "init")
     ctx.data.mkdir(parents=True, exist_ok=True)
     for name in ("config.yaml", "catalog.yaml"):
         dst = ctx.data / name
@@ -43,7 +52,7 @@ def cmd_init(args):
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(text, encoding="utf-8")
             print(f"created: {p}")
-    print("Next: edit data/config.yaml, then run `./mi export` and `./mi check`.")
+    print(f"Next: edit {ctx.data.name}/config.yaml, then run `./mi export` and `./mi check`.")
     return 0
 
 
@@ -59,6 +68,7 @@ def _tree(root):
 def cmd_export(args):
     ctx = _ctx(args)
     _require_data(ctx)
+    _refuse_migration(ctx, "export")
     tmp = Path(tempfile.mkdtemp(prefix=".snapshot-", dir=ctx.data))
     try:
         snap = base.Snapshot(tmp, ctx.snapshot)
@@ -92,6 +102,7 @@ def cmd_export(args):
 def cmd_check(args):
     ctx = _ctx(args)
     _require_data(ctx)
+    _refuse_migration(ctx, "check")
     rep = base.Report(quiet=args.quiet)
     if not args.drift_only:
         for _, fn in each("check"):
@@ -128,7 +139,7 @@ def cmd_render(args):
     ctx = _ctx(args)
     cat = catalog_mod.load(ctx.data)
     out = ctx.data / "INVENTORY.md"
-    text = render(cat, ctx.snapshot)
+    text = render(cat, ctx.snapshot, migrate.load(ctx.data) if ctx.migration else None)
     old = out.read_text(encoding="utf-8") if out.exists() else None
     out.write_text(text, encoding="utf-8")
     print(f"{'unchanged' if old == text else 'written'}: {out}")
@@ -140,6 +151,11 @@ def cmd_render(args):
 def cmd_restore(args):
     ctx = _ctx(args)
     _require_data(ctx)
+    if ctx.migration and not args.dry_run:
+        err = migrate.ensure_os_matches(ctx)
+        if err:
+            print(f"error: {err}", file=sys.stderr)
+            return 2
     cat = catalog_mod.load(ctx.data)
     tokens = [t for s in (args.select or []) for t in s.split(",")]
     if tokens or args.all_defaults:
@@ -184,40 +200,69 @@ def cmd_apt_install(args):
     return base.PARTIAL if skipped or failed else 0
 
 
+# --- migrate ---------------------------------------------------------------
+
+def _inventory_dir(args):
+    return Path(args.data) if args.data else default_data()
+
+
+def cmd_migrate_init(args):
+    try:
+        migrate.init(_inventory_dir(args), args.os_release, Path(args.out) if args.out else MIGRATION_ROOT)
+    except migrate.MigrationError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def cmd_migrate_check(args):
+    target = migration_dir(args.name)
+    inventory = Path(args.data) if args.data else default_data()
+    from .archives import cache_dir
+    rep = migrate.check(target, inventory if inventory.exists() else None, cache=cache_dir(),
+                        refresh=args.refresh, offline=args.offline)
+    return 1 if rep.failed else 0
+
+
 # --- install-skill ---------------------------------------------------------
 
 def cmd_install_skill(args):
-    ctx = _ctx(args)
-    src = ctx.tool_root / "skills" / "inventory"
-    dst = Path.home() / ".claude" / "skills" / "inventory"
-    if args.remove:
+    skills = sorted(d for d in (TOOL_ROOT / "skills").iterdir() if (d / "SKILL.md").exists())
+    if not skills:
+        raise SystemExit(f"no skills found in {TOOL_ROOT / 'skills'}")
+    home = Path.home() / ".claude" / "skills"
+    for src in skills:
+        dst = home / src.name
+        if args.remove:
+            if dst.is_symlink():
+                dst.unlink()
+                print(f"removed link: {dst}")
+            else:
+                print(f"no link at {dst}")
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
         if dst.is_symlink():
-            dst.unlink()
-            print(f"removed link: {dst}")
-        else:
-            print(f"no link at {dst}")
-        return 0
-    if not (src / "SKILL.md").exists():
-        raise SystemExit(f"{src}/SKILL.md not found")
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    if dst.is_symlink():
-        dst.unlink()                          # re-point after the tool folder moved
-    elif dst.exists():
-        raise SystemExit(f"{dst} exists and is not a link. Look inside, then remove it by hand.")
-    dst.symlink_to(src)
-    print(f"linked: {dst} -> {src}")
-    print("Start a new Claude Code session and type /inventory.")
+            dst.unlink()                          # re-point after the tool folder moved
+        elif dst.exists():
+            raise SystemExit(f"{dst} exists and is not a link. Look inside, then remove it by hand.")
+        dst.symlink_to(src)
+        print(f"linked: {dst} -> {src}")
+    if not args.remove:
+        print("Start a new Claude Code session and type " + " or ".join(f"/{s.name}" for s in skills) + ".")
     return 0
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="mi", description="Snapshot this machine and restore it selectively.")
     p.add_argument("--version", action="version", version=__version__)
-    p.add_argument("--data", help="data directory (default: <tool>/data)")
+    p.add_argument("--data", help="inventory directory (default: <tool>/inventory)")
+    p.add_argument("--migration", metavar="TARGET",
+                   help="work on a migration target instead of the inventory: <tool>/migration/TARGET "
+                        "(or a path containing /)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("init", help="create data/ from the examples").set_defaults(fn=cmd_init)
-    sub.add_parser("export", help="write a fresh snapshot of this machine into data/snapshot").set_defaults(
+    sub.add_parser("init", help="create inventory/ from the examples").set_defaults(fn=cmd_init)
+    sub.add_parser("export", help="write a fresh snapshot of this machine into inventory/snapshot").set_defaults(
         fn=cmd_export)
 
     s = sub.add_parser("check", help="health checks and catalog drift (read-only)")
@@ -230,7 +275,7 @@ def main(argv=None):
     s.add_argument("--os-release", help="judge compatibility against this os-release file")
     s.set_defaults(fn=cmd_catalog)
 
-    sub.add_parser("render", help="generate data/INVENTORY.md from catalog.yaml").set_defaults(fn=cmd_render)
+    sub.add_parser("render", help="generate INVENTORY.md from catalog.yaml").set_defaults(fn=cmd_render)
 
     s = sub.add_parser("restore", help="choose groups and apps, then install them")
     s.add_argument("--dry-run", "-n", action="store_true", help="print the plan, run nothing")
@@ -250,11 +295,33 @@ def main(argv=None):
     s.add_argument("packages", nargs="+")
     s.set_defaults(fn=cmd_apt_install)
 
-    s = sub.add_parser("install-skill", help="link the /inventory skill into ~/.claude/skills")
+    s = sub.add_parser("migrate", help="turn the inventory into a ready-to-install plan for another release")
+    msub = s.add_subparsers(dest="migrate_cmd", required=True)
+    m = msub.add_parser("init", help="create migration/<ID>-<VERSION_ID>/ for the release an os-release "
+                                     "file describes")
+    m.add_argument("os_release", help="os-release file of the target (ID, VERSION_ID, VERSION_CODENAME, ...)")
+    m.add_argument("--out", help="where targets live (default: <tool>/migration)")
+    m.set_defaults(fn=cmd_migrate_init)
+    m = msub.add_parser("check", help="list what is still open in a migration target (exit 1 if anything)")
+    m.add_argument("name", help="target name (e.g. debian-13) or a path containing /")
+    m.add_argument("--offline", action="store_true", help="skip the package archive check")
+    m.add_argument("--refresh", action="store_true", help="download the archive indexes even if cached")
+    m.set_defaults(fn=cmd_migrate_check)
+
+    s = sub.add_parser("install-skill", help="link the Claude Code skills (/inventory, /migration) into "
+                                             "~/.claude/skills")
     s.add_argument("--remove", action="store_true")
     s.set_defaults(fn=cmd_install_skill)
 
     args = p.parse_args(argv)
+    if args.migration:
+        if args.data:
+            p.error("use --data or --migration, not both")
+        if args.cmd == "migrate":
+            p.error("--migration does not apply to `mi migrate`; name the target after `migrate check`")
+        args.data = str(migration_dir(args.migration))
+        if not (Path(args.data) / MIGRATION_FILE).exists():
+            p.error(f"{args.data} is not a migration target (no {MIGRATION_FILE}); see `mi migrate init`")
     try:
         return args.fn(args)
     except KeyboardInterrupt:

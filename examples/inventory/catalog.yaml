@@ -1,4 +1,4 @@
-# data/catalog.yaml: what you want on a machine, and why.
+# inventory/catalog.yaml: what you want on a machine, and why.
 # `mi restore` offers these groups and items; `mi render` turns this file into INVENTORY.md;
 # `mi check` compares it with the snapshot (`mi export`) and lists uncatalogued and missing things.
 #
@@ -9,6 +9,8 @@
 #                             ranges (>=, <=, >, <); ubuntu: [] = any Ubuntu version
 #   requires_paths: [/sys/bus/platform/devices/asus-nb-wmi]   hardware condition: hidden unless
 #                             every glob matches on the target (laptop-specific fixes, drivers)
+#   replaces: [item id]       this item is the alternative of those items on other releases;
+#                             `mi migrate init` uses it to decide incompatible items automatically
 #   apt_sources: [id]         keys of the apt_sources map below; added before apt runs
 #   apt / snap / flatpak / vscode / pip: [names]     snap entries may carry flags: "code --classic"
 #   gnome_extensions: [uuid]  printed as a manual step
@@ -69,6 +71,12 @@ groups:
         name: Some licensed app
         manual: |
           Download the installer from the vendor's site and run it.
+      # The same tool from the distribution's own archive on newer releases.
+      - id: example-tool-archive
+        name: Tool from the distribution archive
+        apt: [example-tool]
+        compat: {ubuntu: [">=24.04"], debian: [">=13"]}
+        replaces: [legacy-tool]
 
   - id: legacy
     name: Old-release only

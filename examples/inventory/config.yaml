@@ -1,4 +1,4 @@
-# data/config.yaml: personal settings for machine-inventory. Every key is optional;
+# inventory/config.yaml: personal settings for machine-inventory. Every key is optional;
 # the values below show the format. Paths may use ~ and $VARS.
 
 # Allowed top-level entries in your home directory. `mi check` warns about anything else.
