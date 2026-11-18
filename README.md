@@ -15,7 +15,7 @@ Supported: Debian, Ubuntu and their derivatives (apt, snap, flatpak). Other pack
 Clone the tool anywhere and run the bootstrap script. It installs what `mi` needs (python3, python3-yaml, git, whiptail, curl) if missing:
 
 ```bash
-git clone <tool-repo-url> machine-inventory
+git clone https://github.com/ardaElibol675/Machine-Inventory.git machine-inventory
 ```
 
 ```bash
