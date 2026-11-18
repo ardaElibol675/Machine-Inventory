@@ -10,7 +10,7 @@ import urllib.request
 from pathlib import Path
 
 from .. import shell
-from .base import PHASE_DCONF, Step, q
+from .base import PHASE_DCONF, Step, q, missing_items
 
 EGO = "https://extensions.gnome.org"
 
@@ -75,6 +75,11 @@ def drift(ctx, catalog, rep):
     unclaimed = [p for p in dconf_saved(ctx) if p not in claimed]
     if unclaimed:
         rep.warn(f"gnome: uncatalogued dconf paths: {' '.join(unclaimed)}")
+    installed = set(user_extensions(ctx))
+    missing_items(ctx, catalog, rep, "gnome_extensions", lambda e: e in installed, "gnome", " (extension not installed)")
+    dumped = dconf_saved(ctx)
+    missing_items(ctx, catalog, rep, "dconf", lambda p: p in dumped, "gnome",
+                  " (no dump: empty, or not in config.yaml dconf_paths)")
 
 
 def steps(ctx, catalog, items):

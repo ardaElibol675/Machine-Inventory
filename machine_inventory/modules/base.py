@@ -148,3 +148,17 @@ def backup_install(src, dst, mode="644", sudo=False):
     return (f"if [ -e {q(dst)} ] && ! cmp -s {q(src)} {q(dst)}; then "
             f"{s}cp -a {q(dst)} {q(str(dst) + '.bak-')}$(date +%Y%m%d); fi && "
             f"{s}install -D -m {mode} {q(src)} {q(dst)}")
+
+
+def missing_items(ctx, catalog, rep, key, present, label, hint=""):
+    """Warn about catalog items (for this release and hardware) whose `key` entries are not on this machine.
+
+    present(entry) -> bool. The mirror image of the "uncatalogued" checks: after a restore or an adopt it shows
+    what the catalog promises but the snapshot does not have.
+    """
+    for item in catalog.all_items():
+        if not item.compatible(ctx.os):
+            continue
+        miss = [e for e in item.get(key) if not present(e)]
+        if miss:
+            rep.warn(f"{label}: catalog item '{item.id}' is missing: {' '.join(miss)}{hint}")

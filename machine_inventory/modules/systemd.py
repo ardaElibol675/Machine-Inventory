@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 from .. import shell
-from .base import PHASE_SYSTEMD, Step, q
+from .base import PHASE_SYSTEMD, Step, q, missing_items
 from .etc import dpkg_owned_etc
 
 SYSTEM_DIR = Path("/etc/systemd/system")
@@ -126,6 +126,8 @@ def drift(ctx, catalog, rep):
         rep.warn(f"systemd: uncatalogued units: {' '.join(unclaimed)}")
     else:
         rep.ok("systemd: every own unit is catalogued")
+    have = set(saved(ctx))
+    missing_items(ctx, catalog, rep, "systemd", lambda u: u in have, "systemd", " (unit not installed)")
 
 
 def steps(ctx, catalog, items):

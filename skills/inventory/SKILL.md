@@ -30,6 +30,8 @@ INVENTORY="$TOOL/inventory"
 
 **Migrated machine.** Read `ID` and `VERSION_ID` from `/etc/os-release`. If `$TOOL/migration/<ID>-<VERSION_ID>/migration.yaml` exists and either `$INVENTORY` does not exist or its `snapshot/system.txt` describes another release, this machine was installed from that migration target. Start the inventory from the target instead of the examples (its catalog already has the adapted items, post commands and notes): tell the user, and with their OK run `"$TOOL/mi" migrate adopt <ID>-<VERSION_ID>`. It copies the target's `catalog.yaml` and `config.yaml` into `$INVENTORY` (differing files are kept as `<name>.bak-YYYYMMDD`; notes, reports and git history stay), then continue with the scan. Never run `mi init` over a migrated machine; it would throw that work away.
 
+After an adopt, read the `.bak-YYYYMMDD` files. If they were written for this machine (an earlier scan of this release, not the old release's inventory), carry over what the target could not know: `known` entries, items for things set up on this machine only, and `config.yaml` settings that describe it. Tell the user what you carried over. A `.bak` of the old release only shows what changed; take nothing from it without asking.
+
 Moving to another release or distribution is not this skill's job: that is `/migration`, which reads this inventory and writes ready-to-install plans into `$TOOL/migration/`.
 
 | Path (in `$INVENTORY`) | Written by | What |
@@ -70,6 +72,7 @@ Run `"$TOOL/mi" check`. It prints health checks, then the drift between snapshot
 ### 4. Update the catalog
 - **Uncatalogued** (installed, but no item claims it): put it into the right item, or create an item in the right group, with `name` and `why`. Libraries normally belong to the item that needs them; leftovers of removed programs go into `known` with a `why`. apt pulls dependencies itself, so do not catalogue automatic dependencies.
 - **Missing** (an item's package is not installed): it was removed. Ask the user whether to drop it from the catalog; if they removed it on purpose, also log it. Right after `mi migrate adopt`, missing items are usually ones the user did not pick during the migration: list them in one batch and ask which to drop.
+- **Items `mi check` cannot see:** it compares packages, flatpaks, snaps, VS Code and GNOME extensions, dconf dumps, dotfiles, `/etc` files, systemd units and repos. An item that only has `post:` or `manual:` (a vendor installer, a driver chosen at install time, a setting changed in place) needs a look by hand: check its effect (a binary, a file, a setting) and ask the user if it is unclear.
 - **Adopted items:** keep their `post:` commands, `notes` and `manual:` steps (they were researched for this release); drop `replaces:` entries whose old item is gone. Do not turn a working `post:` into a `manual:` step.
 - **New `/etc` file:** read it, explain what it does, and propose an item (`etc:` + `post:` if a service must restart) or a `known` entry. Add a restorable item only after the user agrees.
 - **Never invent a purpose.** Look at the package description (`apt-cache show`, `flatpak info`) and at `snapshot/packages/apt-history.txt` (which command installed it, together with what). Write a careful guess, mark it `(purpose not confirmed)` in `why`, set `default: false`, and ask the user. A confident wrong entry about someone's system is worse than an empty one.
@@ -102,12 +105,12 @@ Add a section at the **top** of `$INVENTORY/reports/inventory-log.md`:
 If you learned a new machine-specific lesson (something that broke, and why), append it to `notes/pitfalls.md`.
 
 ### 6. Write the inventory README
-Write or refresh `$INVENTORY/README.md` from what is in the repo now (never from memory, and without naming the user's repos or hosts: write `<your-inventory-repo>` and `<tool-repo-url>`):
+Write or refresh `$INVENTORY/README.md` from what is in the repo now (never from memory). The README lives in the user's private repo, so give complete commands with the real clone URLs: read `git -C "$TOOL" remote get-url origin` and `git -C "$INVENTORY" remote get-url origin`. The tool repo is public: write an scp-style URL (`git@host:owner/repo.git`) in its `https://host/owner/repo.git` form so it clones without keys. Write the inventory repo's URL as it is (if it is an SSH URL, say the user needs their SSH key on that host first). Only if a repo has no remote, write `<tool-repo-url>` or `<your-inventory-repo>`; never ask the user for a URL just for the README.
 - one paragraph: which machine this is (`snapshot/system.txt`), the date of the latest scan, and how many groups and items the catalog has (`"$TOOL/mi" catalog`);
 - the groups with one line each (what they are for), and a pointer to `INVENTORY.md` for the details;
 - **Restore on a new machine** (same release), as separate `bash` blocks:
-  `git clone <tool-repo-url> machine-inventory && cd machine-inventory`,
-  `git clone <your-inventory-repo> inventory`, `./bootstrap.sh`, `./mi install-skill`,
+  `git clone <tool repo URL> machine-inventory && cd machine-inventory`,
+  `git clone <inventory repo URL> inventory`, `./bootstrap.sh`, `./mi install-skill`,
   `./mi restore --dry-run`, `./mi restore` (or `/inventory restore` in Claude Code);
 - items that need manual steps or specific hardware (`manual:`, `requires_paths`), so nobody is surprised on the new machine;
 - **Moving to another release or distribution:** one line pointing to `/migration` and the migration repo.

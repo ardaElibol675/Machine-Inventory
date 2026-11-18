@@ -6,7 +6,7 @@ from machine_inventory.modules import gnome
 class FakeSystem:
     """Answers the commands install_extensions runs; records the ones that change something."""
 
-    def __init__(self, shell="GNOME Shell 50.1", installed=(), enabled="['ubuntu-dock@ubuntu.com']", fail=()):
+    def __init__(self, shell="GNOME Shell 50.1", installed=(), enabled="['system-dock@example.org']", fail=()):
         self.shell, self.installed, self.enabled, self.fail = shell, list(installed), enabled, set(fail)
         self.calls = []
 
@@ -27,8 +27,8 @@ class FakeSystem:
 
 
 INFO = {
-    "good@x": {"shell_version_map": {"49": {"version": 7}, "50": {"version": 8}}},
-    "old@x": {"shell_version_map": {"43": {"version": 44}}},
+    "good@example.org": {"shell_version_map": {"49": {"version": 7}, "50": {"version": 8}}},
+    "old@example.org": {"shell_version_map": {"43": {"version": 44}}},
 }
 
 
@@ -48,34 +48,34 @@ class InstallExtensionsTest(unittest.TestCase):
 
     def test_installs_supported_and_skips_the_rest(self):
         sysm = FakeSystem()
-        missing, downloads, out = self.install(sysm, ["good@x", "old@x", "unknown@x"])
-        self.assertEqual(missing, ["old@x", "unknown@x"])
-        self.assertEqual(downloads, [f"{gnome.EGO}/download-extension/good@x.shell-extension.zip?shell_version=50"])
+        missing, downloads, out = self.install(sysm, ["good@example.org", "old@example.org", "unknown@example.org"])
+        self.assertEqual(missing, ["old@example.org", "unknown@example.org"])
+        self.assertEqual(downloads, [f"{gnome.EGO}/download-extension/{'good@example.org'}.shell-extension.zip?shell_version=50"])
         self.assertIn("no version for GNOME Shell 50", out)
         self.assertIn("lookup failed", out)
-        self.assertEqual(sysm.enabled, "['ubuntu-dock@ubuntu.com', 'good@x']")
+        self.assertEqual(sysm.enabled, "['system-dock@example.org', 'good@example.org']")
 
     def test_already_installed_is_only_enabled(self):
-        sysm = FakeSystem(installed=["good@x"], enabled="@as []")
-        missing, downloads, _ = self.install(sysm, ["good@x"])
+        sysm = FakeSystem(installed=["good@example.org"], enabled="@as []")
+        missing, downloads, _ = self.install(sysm, ["good@example.org"])
         self.assertEqual((missing, downloads), ([], []))
-        self.assertEqual(sysm.enabled, "['good@x']")
+        self.assertEqual(sysm.enabled, "['good@example.org']")
 
     def test_no_change_when_already_enabled(self):
-        sysm = FakeSystem(installed=["good@x"], enabled="['good@x']")
-        self.install(sysm, ["good@x"])
+        sysm = FakeSystem(installed=["good@example.org"], enabled="['good@example.org']")
+        self.install(sysm, ["good@example.org"])
         self.assertFalse(any(c[:2] == ["gsettings", "set"] for c in sysm.calls))
 
     def test_install_failure_is_reported(self):
-        sysm = FakeSystem(fail=["good@x"])
-        missing, _, out = self.install(sysm, ["good@x"])
-        self.assertEqual(missing, ["good@x"])
+        sysm = FakeSystem(fail=["good@example.org"])
+        missing, _, out = self.install(sysm, ["good@example.org"])
+        self.assertEqual(missing, ["good@example.org"])
         self.assertIn("gnome-extensions install failed", out)
 
     def test_without_gnome_shell(self):
         sysm = FakeSystem(shell=None)
-        missing, _, out = self.install(sysm, ["good@x"])
-        self.assertEqual(missing, ["good@x"])
+        missing, _, out = self.install(sysm, ["good@example.org"])
+        self.assertEqual(missing, ["good@example.org"])
         self.assertIn("gnome-shell not found", out)
 
     def test_helpers(self):

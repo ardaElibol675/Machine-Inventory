@@ -14,7 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from .. import shell
-from .base import PHASE_ETC, Step, backup_install, read_lines
+from .base import PHASE_ETC, Step, backup_install, read_lines, missing_items
 
 MEDIA_INFO = Path("/var/log/installer/media-info")
 
@@ -179,6 +179,9 @@ def drift(ctx, catalog, rep):
         rep.warn(f"/etc: uncatalogued changes: {' '.join(unclaimed)}")
     else:
         rep.ok("/etc: every saved change is catalogued")
+    have = set(saved(ctx))
+    missing_items(ctx, catalog, rep, "etc", lambda p: p in have, "/etc",
+                  " (not on this machine, or back to the package's version)")
 
 
 def steps(ctx, catalog, items):

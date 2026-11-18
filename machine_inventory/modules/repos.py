@@ -9,7 +9,7 @@ import os
 
 from .. import shell
 from ..config import expand, tilde
-from .base import PHASE_REPOS, Step, q, read_lines
+from .base import PHASE_REPOS, Step, q, read_lines, missing_items
 
 
 def find_repos(ctx):
@@ -97,6 +97,8 @@ def drift(ctx, catalog, rep):
         rep.warn(f"repos: uncatalogued: {' '.join(unclaimed)}")
     else:
         rep.ok("repos: every repository is catalogued")
+    have = {r["path"] for r in repos(ctx)}
+    missing_items(ctx, catalog, rep, "repos", lambda p: p in have, "repos", " (not cloned here)")
 
 
 def steps(ctx, catalog, items):

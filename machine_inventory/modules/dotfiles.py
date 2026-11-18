@@ -7,7 +7,7 @@ import glob
 import os
 
 from ..config import expand
-from .base import PHASE_DOTFILES, Step, backup_install
+from .base import PHASE_DOTFILES, Step, backup_install, missing_items
 
 DIR = "dotfiles"
 
@@ -46,6 +46,8 @@ def drift(ctx, catalog, rep):
         rep.warn(f"dotfiles: uncatalogued: {' '.join(unclaimed)}")
     else:
         rep.ok("dotfiles: every saved dotfile is catalogued")
+    missing_items(ctx, catalog, rep, "dotfiles", lambda p: bool(_match(ctx, [p])), "dotfiles",
+                  " (not on this machine, or not in config.yaml dotfiles)")
 
 
 def steps(ctx, catalog, items):
