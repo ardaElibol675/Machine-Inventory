@@ -27,7 +27,7 @@ def _refuse_migration(ctx, what):
     if ctx.migration:
         raise SystemExit(f"{ctx.data} is a migration target ({MIGRATION_FILE}): it holds the payload for "
                          f"another release, not facts about this machine, so `mi {what}` does not apply. "
-                         f"Use `mi migrate check {ctx.data.name}`.")
+                         f"Use `mi migrate check {ctx.data.name}` or `mi migrate {ctx.data.name} --dry-run`.")
 
 
 # --- init ------------------------------------------------------------------
@@ -200,6 +200,12 @@ def cmd_apt_install(args):
     return base.PARTIAL if skipped or failed else 0
 
 
+def cmd_gnome_extensions(args):
+    """Internal: used by restore plans. Installs and enables what it can, warns about the rest."""
+    from .modules import gnome
+    return base.PARTIAL if gnome.install_extensions(args.uuids) else 0
+
+
 # --- migrate ---------------------------------------------------------------
 
 def _inventory_dir(args):
@@ -213,6 +219,27 @@ def cmd_migrate_init(args):
         print(f"error: {e}", file=sys.stderr)
         return 2
     return 0
+
+
+def _target_args(args):
+    """Point args.data at the named migration target, or exit with a clear error."""
+    target = migration_dir(args.name)
+    if not (target / MIGRATION_FILE).exists():
+        raise SystemExit(f"{target} is not a migration target (no {MIGRATION_FILE}); see `mi migrate init`")
+    args.data = str(target)
+    return args
+
+
+def cmd_migrate_restore(args):
+    return cmd_restore(_target_args(args))
+
+
+def cmd_migrate_render(args):
+    return cmd_render(_target_args(args))
+
+
+def cmd_migrate_catalog(args):
+    return cmd_catalog(_target_args(args))
 
 
 def cmd_migrate_check(args):
@@ -252,13 +279,37 @@ def cmd_install_skill(args):
     return 0
 
 
+def _add_restore_args(s):
+    s.add_argument("--dry-run", "-n", action="store_true", help="print the plan, run nothing")
+    s.add_argument("--select", action="append", metavar="IDS",
+                   help="comma-separated group ids (their default items) and item ids")
+    s.add_argument("--all-defaults", action="store_true", help="every default item")
+    s.add_argument("--include-incompatible", action="store_true",
+                   help="also offer items not marked compatible with this system")
+    s.add_argument("--no-whiptail", action="store_true", help="use numbered text prompts")
+    s.add_argument("--yes", "-y", action="store_true", help="do not ask before running the plan")
+    s.add_argument("--keep-going", action="store_true",
+                   help="never ask on a failure: skip the command and list it at the end")
+
+
+MIGRATE_ACTIONS = ("init", "check", "render", "catalog", "restore")
+
+
+def _route_migrate(argv):
+    """`mi migrate <target> ...` is the restore of a target: rewrite it to `mi migrate restore <target> ...`."""
+    argv = list(argv)
+    if "migrate" in argv:
+        i = argv.index("migrate")
+        rest = argv[i + 1:]
+        if rest and not rest[0].startswith("-") and rest[0] not in MIGRATE_ACTIONS:
+            argv.insert(i + 1, "restore")
+    return argv
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="mi", description="Snapshot this machine and restore it selectively.")
     p.add_argument("--version", action="version", version=__version__)
     p.add_argument("--data", help="inventory directory (default: <tool>/inventory)")
-    p.add_argument("--migration", metavar="TARGET",
-                   help="work on a migration target instead of the inventory: <tool>/migration/TARGET "
-                        "(or a path containing /)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("init", help="create inventory/ from the examples").set_defaults(fn=cmd_init)
@@ -277,26 +328,29 @@ def main(argv=None):
 
     sub.add_parser("render", help="generate INVENTORY.md from catalog.yaml").set_defaults(fn=cmd_render)
 
-    s = sub.add_parser("restore", help="choose groups and apps, then install them")
-    s.add_argument("--dry-run", "-n", action="store_true", help="print the plan, run nothing")
-    s.add_argument("--select", action="append", metavar="IDS",
-                   help="comma-separated group ids (their default items) and item ids")
-    s.add_argument("--all-defaults", action="store_true", help="every default item")
-    s.add_argument("--include-incompatible", action="store_true",
-                   help="also offer items not marked compatible with this system")
+    s = sub.add_parser("restore", help="choose groups and apps from the inventory, then install them")
+    _add_restore_args(s)
     s.add_argument("--os-release", help="pretend the target is described by this os-release file")
-    s.add_argument("--no-whiptail", action="store_true", help="use numbered text prompts")
-    s.add_argument("--yes", "-y", action="store_true", help="do not ask before running the plan")
-    s.add_argument("--keep-going", action="store_true",
-                   help="never ask on a failure: skip the command and list it at the end")
     s.set_defaults(fn=cmd_restore)
 
-    s = sub.add_parser("apt-install", help=argparse.SUPPRESS)
+    s = sub.add_parser("apt-install")            # internal, used by restore plans; not listed
     s.add_argument("packages", nargs="+")
     s.set_defaults(fn=cmd_apt_install)
 
-    s = sub.add_parser("migrate", help="turn the inventory into a ready-to-install plan for another release")
-    msub = s.add_subparsers(dest="migrate_cmd", required=True)
+    s = sub.add_parser("gnome-extensions")       # internal, used by restore plans; not listed
+    s.add_argument("uuids", nargs="+")
+    s.set_defaults(fn=cmd_gnome_extensions)
+
+    s = sub.add_parser("migrate", help="plan a move to another release, then install it: mi migrate <target>",
+                       description="Migration targets live in <tool>/migration/<target>. "
+                                   "`mi migrate <target>` installs a target on the new machine "
+                                   "(same options as restore, e.g. `mi migrate ubuntu-26.04 --dry-run`); "
+                                   "init, check, render and catalog prepare and inspect targets.")
+    msub = s.add_subparsers(dest="migrate_cmd", required=True, metavar="{<target>,init,check,render,catalog}")
+    m = msub.add_parser("restore", prog="mi migrate")   # reached through `mi migrate <target>`, not listed
+    m.add_argument("name", help="target name (e.g. ubuntu-26.04) or a path containing /")
+    _add_restore_args(m)
+    m.set_defaults(fn=cmd_migrate_restore)
     m = msub.add_parser("init", help="create migration/<ID>-<VERSION_ID>/ for the release an os-release "
                                      "file describes")
     m.add_argument("os_release", help="os-release file of the target (ID, VERSION_ID, VERSION_CODENAME, ...)")
@@ -307,21 +361,19 @@ def main(argv=None):
     m.add_argument("--offline", action="store_true", help="skip the package archive check")
     m.add_argument("--refresh", action="store_true", help="download the archive indexes even if cached")
     m.set_defaults(fn=cmd_migrate_check)
+    m = msub.add_parser("render", help="write INVENTORY.md of a target (decisions and catalog)")
+    m.add_argument("name", help="target name (e.g. debian-13) or a path containing /")
+    m.set_defaults(fn=cmd_migrate_render)
+    m = msub.add_parser("catalog", help="list a target's groups and items")
+    m.add_argument("name", help="target name (e.g. debian-13) or a path containing /")
+    m.set_defaults(fn=cmd_migrate_catalog)
 
     s = sub.add_parser("install-skill", help="link the Claude Code skills (/inventory, /migration) into "
                                              "~/.claude/skills")
     s.add_argument("--remove", action="store_true")
     s.set_defaults(fn=cmd_install_skill)
 
-    args = p.parse_args(argv)
-    if args.migration:
-        if args.data:
-            p.error("use --data or --migration, not both")
-        if args.cmd == "migrate":
-            p.error("--migration does not apply to `mi migrate`; name the target after `migrate check`")
-        args.data = str(migration_dir(args.migration))
-        if not (Path(args.data) / MIGRATION_FILE).exists():
-            p.error(f"{args.data} is not a migration target (no {MIGRATION_FILE}); see `mi migrate init`")
+    args = p.parse_args(_route_migrate(sys.argv[1:] if argv is None else argv))
     try:
         return args.fn(args)
     except KeyboardInterrupt:

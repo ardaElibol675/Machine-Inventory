@@ -2,8 +2,17 @@
 
 snapshot/dconf/<path>.ini holds `dconf dump <path>`, e.g. dconf/org.gnome.shell.ini for /org/gnome/shell/.
 """
+import ast
+import json
+import re
+import tempfile
+import urllib.request
+from pathlib import Path
+
 from .. import shell
-from .base import PHASE_DCONF, PHASE_MANUAL, Step, q
+from .base import PHASE_DCONF, Step, q
+
+EGO = "https://extensions.gnome.org"
 
 DCONF_DIR = "dconf"
 
@@ -82,7 +91,94 @@ def steps(ctx, catalog, items):
         out.append(Step(PHASE_DCONF, "GNOME settings (dconf)", cmds, notes))
     exts = [e for i in items for e in i.get("gnome_extensions")]
     if exts:
-        out.append(Step(PHASE_MANUAL, "GNOME extensions",
-                        notes=["Install with Extension Manager (or extensions.gnome.org), then enable:",
-                               *[f"  {e}" for e in exts]], manual=True))
+        # Before the dconf step, so extension settings land next to installed extensions.
+        out.append(Step(PHASE_DCONF - 1, "GNOME extensions (from extensions.gnome.org)",
+                        [f"{q(ctx.tool_root / 'mi')} gnome-extensions " + " ".join(q(e) for e in exts)],
+                        ["installed for this user and enabled; GNOME loads them after you log out and back in",
+                         "an extension without a build for this GNOME Shell version is skipped with a warning"],
+                        soft=True))
     return out
+
+
+# --- install (`mi gnome-extensions`, used by restore plans) -----------------
+
+def shell_major(version_text):
+    """'GNOME Shell 50.1' -> '50' (None if it cannot be read)."""
+    m = re.search(r"(\d+)(?:\.\d+)*", version_text or "")
+    return m.group(1) if m else None
+
+
+def parse_strv(text):
+    """A gsettings string array ("['a', 'b']" or "@as []") -> list."""
+    text = (text or "").strip()
+    if text.startswith("@as"):
+        text = text[3:].strip()
+    try:
+        value = ast.literal_eval(text) if text else []
+    except (ValueError, SyntaxError):
+        return []
+    return [str(v) for v in value] if isinstance(value, (list, tuple)) else []
+
+
+def format_strv(values):
+    return "[" + ", ".join("'" + v.replace("\\", "\\\\").replace("'", "\\'") + "'" for v in values) + "]"
+
+
+def _fetch_json(url):
+    with urllib.request.urlopen(url, timeout=30) as r:
+        return json.load(r)
+
+
+def _download(url, dest):
+    with urllib.request.urlopen(url, timeout=120) as r:
+        Path(dest).write_bytes(r.read())
+
+
+def install_extensions(uuids, run=shell.run, fetch_json=_fetch_json, download=_download, out=print):
+    """Install `uuids` from extensions.gnome.org for the running GNOME Shell and enable them.
+
+    Returns the uuids that were not installed. Enabling goes through the org.gnome.shell
+    enabled-extensions key, because a running shell only sees new extensions after a re-login.
+    """
+    major = shell_major(run(["gnome-shell", "--version"], check=False))
+    if not major:
+        out("WARN   gnome-shell not found; no extensions installed")
+        return list(uuids)
+    installed = set((run(["gnome-extensions", "list"], check=False) or "").split())
+    missing, enable = [], []
+    for uuid in uuids:
+        if uuid in installed:
+            out(f"OK     {uuid}: already installed")
+            enable.append(uuid)
+            continue
+        try:
+            info = fetch_json(f"{EGO}/extension-info/?uuid={uuid}")
+        except Exception as e:                       # network, 404 for an unknown uuid, bad JSON
+            out(f"WARN   {uuid}: extensions.gnome.org lookup failed ({e}); skipped")
+            missing.append(uuid)
+            continue
+        if major not in (info.get("shell_version_map") or {}):
+            out(f"WARN   {uuid}: no version for GNOME Shell {major} on extensions.gnome.org; skipped")
+            missing.append(uuid)
+            continue
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = Path(tmp) / f"{uuid}.zip"
+            try:
+                download(f"{EGO}/download-extension/{uuid}.shell-extension.zip?shell_version={major}", zip_path)
+            except Exception as e:
+                out(f"WARN   {uuid}: download failed ({e}); skipped")
+                missing.append(uuid)
+                continue
+            if run(["gnome-extensions", "install", "--force", str(zip_path)], check=False) is None:
+                out(f"WARN   {uuid}: gnome-extensions install failed; skipped")
+                missing.append(uuid)
+                continue
+        out(f"OK     {uuid}: installed (version {info['shell_version_map'][major].get('version')})")
+        enable.append(uuid)
+    if enable:
+        current = parse_strv(run(["gsettings", "get", "org.gnome.shell", "enabled-extensions"], check=False))
+        wanted = current + [u for u in enable if u not in current]
+        if wanted != current:
+            run(["gsettings", "set", "org.gnome.shell", "enabled-extensions", format_strv(wanted)], check=False)
+        out(f"enabled: {' '.join(enable)} (log out and back in to load new extensions)")
+    return missing

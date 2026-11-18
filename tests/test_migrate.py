@@ -340,37 +340,47 @@ class Cli(MigrationTest):
     def test_export_and_check_are_refused(self):
         t = self.init()
         for cmd in ("export", "check"):
-            rc, out = self.run_mi("--migration", str(t), cmd)
+            rc, out = self.run_mi("--data", str(t), cmd)
             self.assertNotEqual(rc, 0)
             self.assertIn("migration target", out)
             self.assertIn("mi migrate check debian-13", out)
+            self.assertIn("mi migrate debian-13 --dry-run", out)
 
-    def test_migration_option(self):
+    def test_migrate_target_commands(self):
         t = self.init()
-        rc, out = self.run_mi("--migration", str(t), "catalog")
+        rc, out = self.run_mi("migrate", "catalog", str(t))
         self.assertEqual(rc, 0)
         self.assertIn("Target: Debian GNU/Linux 13 (trixie)", out)
-        rc, out = self.run_mi("--migration", str(t), "restore", "--dry-run", "--all-defaults")
+        rc, out = self.run_mi("migrate", str(t), "--dry-run", "--all-defaults")      # `mi migrate <target>`
         self.assertEqual(rc, 0)
         self.assertIn("Target system: Debian GNU/Linux 13 (trixie)", out)
+        self.assertIn("dry run", out)
         self.assertNotIn("Incompatible", out)
-        rc, out = self.run_mi("--migration", str(self.inv), "catalog")       # not a migration target
+        rc, out = self.run_mi("migrate", str(self.inv), "--dry-run")                 # not a migration target
+        self.assertNotEqual(rc, 0)
+        self.assertIn("not a migration target", out)
+        rc, out = self.run_mi("restore", "--migration", str(t), "--dry-run")         # the old option is gone
         self.assertEqual(rc, 2)
-        rc, out = self.run_mi("--migration", str(t), "--data", str(self.inv), "catalog")
-        self.assertEqual(rc, 2)
+
+    def test_route_migrate(self):
+        self.assertEqual(cli._route_migrate(["migrate", "debian-13", "-n"]), ["migrate", "restore", "debian-13", "-n"])
+        self.assertEqual(cli._route_migrate(["--data", "x", "migrate", "check", "debian-13"]),
+                         ["--data", "x", "migrate", "check", "debian-13"])
+        self.assertEqual(cli._route_migrate(["migrate", "-h"]), ["migrate", "-h"])
+        self.assertEqual(cli._route_migrate(["restore", "-n"]), ["restore", "-n"])
 
     def test_real_restore_needs_the_target_release(self):
         osr = self.root / "os-release"
         osr.write_text('ID=someos\nVERSION_ID="7"\nVERSION_CODENAME=seven\nPRETTY_NAME="Some OS 7"\n')
         t = self.init(osr)
-        rc, out = self.run_mi("--migration", str(t), "restore", "--select", "build-tools", "--yes")
+        rc, out = self.run_mi("migrate", str(t), "--select", "build-tools", "--yes")
         self.assertEqual(rc, 2)
         self.assertIn("this migration target is for someos 7", out)
 
     def test_render_adds_decisions(self):
         t = self.init()
         self.decide(t, **{"old-only": {"action": "drop", "why": "gone", "todo": "install by hand if needed"}})
-        rc, _ = self.run_mi("--migration", str(t), "render")
+        rc, _ = self.run_mi("migrate", "render", str(t))
         self.assertEqual(rc, 0)
         text = (t / "INVENTORY.md").read_text()
         self.assertIn("# Migration target: Debian GNU/Linux 13 (trixie)", text)

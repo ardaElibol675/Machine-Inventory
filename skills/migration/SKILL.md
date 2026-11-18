@@ -1,6 +1,6 @@
 ---
 name: migration
-description: Turns the user's machine-inventory into a ready-to-install plan for another release or distribution ("move me to Debian 13", "migrate to Ubuntu 26.04"). Reads the inventory, never scans the machine; keeps what fits the target, researches and proposes alternatives for what does not, and records every decision in the user's private migration repo (migration/<ID>-<VERSION_ID>/), so the new machine only has to clone it and run `mi --migration <target> restore`. Never installs anything and never runs git. Runs when the user types /migration.
+description: Turns the user's machine-inventory into a ready-to-install plan for another release or distribution ("move me to Debian 13", "migrate to Ubuntu 26.04"). Reads the inventory, never scans the machine; keeps what fits the target, researches and proposes alternatives for what does not, and records every decision in the user's private migration repo (migration/<ID>-<VERSION_ID>/), so the new machine only has to clone it and run `mi migrate <target>`. Never installs anything and never runs git. Runs when the user types /migration.
 disable-model-invocation: true
 ---
 
@@ -18,7 +18,8 @@ Write every file, name and identifier in English (catalog entries, decisions, RE
 
 - **Never scan the machine.** No `mi export`, no `mi check`, no reading `/etc`, package databases or the home directory to learn about the system. The inventory is the only source of facts about the current machine; if it is stale, the user runs `/inventory` first. This keeps the result reproducible and reviewable.
 - **The inventory is read-only.** Never edit anything in `$INVENTORY`. Everything you write goes into `$MIGRATION/<target>/` and `$MIGRATION/README.md`.
-- **No installs, no system changes, no git.** Committing and pushing the migration repo is the user's decision.
+- **No installs, no system changes, no git writes.** Committing and pushing the migration repo is the user's decision. Reading remote URLs (`git remote get-url origin`) is fine.
+- **Automate what a script can do.** The new machine should need the user only for what truly needs a person: signing in to an account or activating a licence, consent dialogs, checks that only make sense after a reboot, and code changes (porting). Anything else (an official command-line installer, recreating a git-ignored config file, building a workspace, registering a file with this machine's paths, marking a package manual, a kernel parameter the source machine had) becomes `post:` commands that are safe to run twice, not a `manual:` step. Test non-trivial commands on scratch copies of the files they edit.
 - **Never state a fact about the target without checking it** in an official source (the distro's package search or archive, its release notes, upstream documentation, the extension or app store API). Say where you looked. "Probably available" is not a decision.
 - **Nothing specific is hard-coded here.** The checklist below is by category; the answers come from research for this source, this target and these items.
 - **The tool repo is public.** Never put personal data into `$TOOL`.
@@ -96,7 +97,7 @@ Then apply the decisions, editing only `$MIGRATION/<target>/`:
 - **replace:** add the alternative item to `catalog.yaml` with `replaces: [<old id>]`, remove the old item, decision `{action: replace, by: [<new id>], why: ...}`. Naming the new item in `by` is enough; it needs no decision of its own unless it is an inventory item (then `keep`).
 - **drop:** remove the item from `catalog.yaml`; decision `drop` with a `why`.
 - **add:** something the target needs that the source did not (a replacement for a removed default tool, a firmware package); decision `add` with a `why`.
-- Anything the new machine needs by hand goes into the decision's `todo` and, when it belongs to an item, into its `manual:`.
+- Anything the new machine needs by hand (see "Automate what a script can do") goes into the decision's `todo` and, when it belongs to an item, into its `manual:`.
 - Remove payload files that no item references any more; copy any file a new item needs into `snapshot/` (only from the inventory's snapshot or from official sources you cite).
 
 Every decision except a plain `keep` needs a `why`. Keep `migration.yaml` in catalog order.
@@ -104,24 +105,25 @@ Every decision except a plain `keep` needs a `why`. Keep `migration.yaml` in cat
 ## 5. Verify
 
 ```bash
-"$TOOL/mi" --migration <target> render
+"$TOOL/mi" migrate render <target>
 "$TOOL/mi" migrate check <target>
-"$TOOL/mi" --migration <target> restore --dry-run --all-defaults
+"$TOOL/mi" migrate <target> --dry-run --all-defaults
 ```
 
 `migrate check` must report nothing open (warnings are for review: explain each one in a `why` or a `todo`). The dry run must show no incompatible items and no "not in the snapshot" notes. Read the plan once as the new machine would: sources, packages, files written, services enabled, manual steps.
 
 ## 6. Write the migration README
 
-Write or refresh `$MIGRATION/README.md` from what is in the repo now (never from memory; no fixed repo names or hosts: write `<tool-repo-url>` and `<your-migration-repo>`):
+Write or refresh `$MIGRATION/README.md` from what is in the repo now (never from memory). For the clone URLs read `git -C "$TOOL" remote get-url origin` and `git -C "$MIGRATION" remote get-url origin`. The tool repo is public: write an scp-style URL (`git@host:owner/repo.git`) in its `https://host/owner/repo.git` form so it clones without keys. Write the migration repo's URL as it is (if it is an SSH URL, say the user needs their SSH key on that host first). If a repo has no remote, write `<tool-repo-url>` or `<your-migration-repo>`; never ask the user for a URL just for the README.
 - what this repo is (migration targets made from the user's inventory by `/migration`) and that `INVENTORY.md` in each target has the details;
 - **one section per target** (every folder with a `migration.yaml`): target name, source system, created date, decision totals;
   - **Migrate to a new machine**, as separate `bash` blocks:
     `git clone <tool-repo-url> machine-inventory && cd machine-inventory`,
     `git clone <your-migration-repo> migration`, `./bootstrap.sh`, `./mi install-skill`,
-    `./mi --migration <target> restore --dry-run`, `./mi --migration <target> restore`;
-  - open `todo`s and the items' manual steps, in the order the user will meet them;
-  - what was dropped and why, in one line each, so nobody looks for it later.
+    `./mi migrate <target> --dry-run`, `./mi migrate <target>`;
+  - open `todo`s and the items' manual steps, in the order the user will meet them.
+
+Nothing else: no change log and no list of dropped items (both are in each target's `INVENTORY.md`).
 
 ## 7. Summarise
 

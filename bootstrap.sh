@@ -26,7 +26,7 @@ if [ -d data ] && [ ! -d inventory ]; then
 elif [ -d migration ]; then
   echo "Migration targets found:"
   for d in migration/*/; do [ -f "$d/migration.yaml" ] && echo "    $(basename "$d")"; done
-  echo "Next: ./mi --migration <target> restore --dry-run    (then the same without --dry-run)"
+  echo "Next: ./mi migrate <target> --dry-run    (then ./mi migrate <target>)"
 elif [ -d inventory ]; then
   echo "Next: ./mi restore --dry-run    (then ./mi restore)"
 else

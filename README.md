@@ -124,7 +124,7 @@ Non-interactive use:
 ./mi restore --dry-run --all-defaults --os-release tests/fixtures/ubuntu-24.04   # pretend another target
 ```
 
-The plan runs in this order: apt sources and keys → apt → snap → flatpak → VS Code → pip → git clones → dotfiles → systemd units → `/etc` files → dconf → post commands. Manual steps (downloads, licences) are printed at the end. Existing files that differ are kept as `<file>.bak-YYYYMMDD`.
+The plan runs in this order: apt sources and keys → apt → snap → flatpak → VS Code → pip → git clones → dotfiles → systemd units → `/etc` files → GNOME extensions (downloaded from extensions.gnome.org for the running GNOME Shell and enabled; they load after the next login) → dconf → post commands. Manual steps (licence sign-ins, checks after a reboot) are printed at the end. Existing files that differ are kept as `<file>.bak-YYYYMMDD`.
 
 Failures:
 - **Package installs never stop the run.** apt packages that the target's repositories do not have are skipped with a warning; if the rest fails as a batch, each package is tried on its own. A failing snap, flatpak, VS Code extension or pip package is skipped too. Everything skipped is listed at the end, and `mi restore` exits with code 3.
@@ -147,7 +147,7 @@ Without Claude Code, the same building blocks:
 ```bash
 ./mi migrate init <target-os-release-file>   # creates migration/<ID>-<VERSION_ID>/ (keep / replace / pending)
 ./mi migrate check <ID>-<VERSION_ID>         # open decisions, missing files, packages the target lacks
-./mi --migration <ID>-<VERSION_ID> render    # INVENTORY.md with the decisions table
+./mi migrate render <ID>-<VERSION_ID>        # INVENTORY.md with the decisions table
 ```
 
 `mi migrate check` downloads the target's package indexes (cached in `~/.cache/machine-inventory/`); `--offline` skips that part.
@@ -167,14 +167,14 @@ git clone <your-migration-repo> migration
 ```
 
 ```bash
-./mi --migration <target> restore --dry-run
+./mi migrate <target> --dry-run
 ```
 
 ```bash
-./mi --migration <target> restore
+./mi migrate <target>
 ```
 
-`--migration <target>` makes every command use `migration/<target>/` instead of `inventory/`. `catalog`, `render` and `restore --dry-run` judge items against the target's os-release, so you can dry-run a target on the old machine too. A real restore refuses to run on any release other than the target, and `export` and `check` refuse to run on a migration target (it is a plan, not facts about a machine). After the restore, start a fresh inventory on the new machine with `./mi init`, or clone your inventory repo and let `/inventory` catch it up.
+`mi migrate <target>` is `restore` for `migration/<target>/` instead of `inventory/`, with the same options (`--dry-run`, `--select`, `--all-defaults`, ...). `mi migrate catalog <target>`, `mi migrate render <target>` and `mi migrate <target> --dry-run` judge items against the target's os-release, so you can dry-run a target on the old machine too. A real restore refuses to run on any release other than the target, and `export` and `check` refuse to run on a migration target (it is a plan, not facts about a machine). After the restore, start a fresh inventory on the new machine with `./mi init`, or clone your inventory repo and let `/inventory` catch it up.
 
 ## Compatibility rules
 
