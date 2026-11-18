@@ -127,6 +127,7 @@ Non-interactive use:
 The plan runs in this order: apt sources and keys → apt → snap → flatpak → VS Code → pip → git clones → dotfiles → systemd units → `/etc` files → GNOME extensions (downloaded from extensions.gnome.org for the running GNOME Shell and enabled; they load after the next login) → dconf → post commands. Manual steps (licence sign-ins, checks after a reboot) are printed at the end. Existing files that differ are kept as `<file>.bak-YYYYMMDD`.
 
 Failures:
+
 - **Package installs never stop the run.** apt packages that the target's repositories do not have are skipped with a warning; if the rest fails as a batch, each package is tried on its own. A failing snap, flatpak, VS Code extension or pip package is skipped too. Everything skipped is listed at the end, and `mi restore` exits with code 3.
 - **Anything else** (adding a source, writing a config file, enabling a unit) makes `mi` stop and ask: retry, skip, or abort, because later steps may depend on it. `--keep-going` skips those as well, without asking.
 
