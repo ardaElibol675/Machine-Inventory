@@ -16,8 +16,11 @@ Nothing here knows about a particular distribution or release: the target is wha
 os-release file it is given, and package archives are looked up in archives.py.
 """
 import datetime
+import re
 import shutil
 from pathlib import Path
+
+import yaml
 
 from . import archives, catalog as catalog_mod, shell
 from .catalog import compat_matches
@@ -398,3 +401,67 @@ def ensure_os_matches(ctx):
                 f"{have.get('PRETTY_NAME') or label_of(have)}. Restore it on the new machine "
                 f"(a dry run works anywhere).")
     return None
+
+
+ADOPTED = ("catalog.yaml", "config.yaml")
+REPLACES_LINE = re.compile(r"^(\s*)replaces:\s*\[([^\]]*)\]\s*$")
+
+
+def _drop_dangling_replaces(text):
+    """A target's items may replace items of the old release; in an inventory those ids must exist.
+
+    Rewrites flow-style `replaces: [a, b]` lines (the form `mi migrate init` and the skill write), keeping
+    the rest of the file and its comments as they are.
+    """
+    ids = {i.id for i in catalog_mod.parse(yaml.safe_load(text), strict_refs=False).all_items()}
+    out = []
+    for line in text.splitlines(keepends=True):
+        m = REPLACES_LINE.match(line.rstrip("\n"))
+        if m:
+            keep = [r.strip() for r in m.group(2).split(",") if r.strip() in ids]
+            if not keep:
+                continue
+            line = f"{m.group(1)}replaces: [{', '.join(keep)}]\n"
+        out.append(line)
+    text = "".join(out)
+    catalog_mod.parse(yaml.safe_load(text))     # strict: fails if a block-style list is still dangling
+    return text
+
+
+def adopt(mig_dir, inventory, os_release="/etc/os-release", force=False, today=None, out=print):
+    """Make a migration target the starting point of the inventory on the machine it was installed on.
+
+    Copies the target's catalog.yaml and config.yaml into the inventory, so the first scan of the new machine
+    starts from the adapted catalog (post commands, notes, decisions) instead of the examples. Existing files
+    that differ are kept as <name>.bak-YYYYMMDD. The snapshot is left alone: `mi export` replaces it.
+    """
+    mig_dir, inventory = Path(mig_dir), Path(inventory)
+    if not (mig_dir / MIGRATION_FILE).exists():
+        raise MigrationError(f"{mig_dir} is not a migration target (no {MIGRATION_FILE})")
+    want = read_os_release(mig_dir / TARGET_OS_RELEASE)
+    have = read_os_release(os_release)
+    if not force and (want.get("ID"), want.get("VERSION_ID")) != (have.get("ID"), have.get("VERSION_ID")):
+        raise MigrationError(f"{mig_dir.name} is for {label_of(want)}, but this machine runs "
+                             f"{have.get('PRETTY_NAME') or label_of(have)}; adopt it on the machine it was "
+                             f"installed on (or pass --force)")
+    stamp = (today or datetime.date.today()).strftime("%Y%m%d")
+    inventory.mkdir(parents=True, exist_ok=True)
+    for name in ADOPTED:
+        src, dst = mig_dir / name, inventory / name
+        if not src.exists():
+            raise MigrationError(f"{src} is missing")
+        text = src.read_text(encoding="utf-8")
+        if name == "catalog.yaml":
+            try:
+                text = _drop_dangling_replaces(text)
+            except catalog_mod.CatalogError as e:
+                raise MigrationError(f"{src}: {e}") from e
+        if dst.exists():
+            if dst.read_text(encoding="utf-8", errors="replace") == text:
+                out(f"same:    {dst}")
+                continue
+            bak = dst.with_name(f"{name}.bak-{stamp}")
+            dst.replace(bak)
+            out(f"kept:    {bak}")
+        dst.write_text(text, encoding="utf-8")
+        out(f"adopted: {dst} (from {mig_dir.name})")

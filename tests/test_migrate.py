@@ -368,6 +368,44 @@ class Cli(MigrationTest):
                          ["--data", "x", "migrate", "check", "debian-13"])
         self.assertEqual(cli._route_migrate(["migrate", "-h"]), ["migrate", "-h"])
         self.assertEqual(cli._route_migrate(["restore", "-n"]), ["restore", "-n"])
+        self.assertEqual(cli._route_migrate(["migrate", "adopt", "debian-13"]), ["migrate", "adopt", "debian-13"])
+
+    def test_adopt(self):
+        t = self.init()
+        # the target replaces an item of the old release: fine in a target, unknown in an inventory
+        data = yaml.safe_load((t / "catalog.yaml").read_text())
+        item = next(i for g in data["groups"] for i in g["items"] if i["id"] == "demo")
+        item["replaces"] = ["old-only"]
+        (t / "catalog.yaml").write_text("# my comment\n" + yaml.safe_dump(data, sort_keys=False, default_flow_style=None))
+        new_inv = self.root / "new-inventory"
+        rc, out = self.run_mi("--data", str(new_inv), "migrate", "adopt", str(t), "--os-release", str(DEBIAN))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual((new_inv / "config.yaml").read_bytes(), (t / "config.yaml").read_bytes())
+        adopted = (new_inv / "catalog.yaml").read_text()
+        self.assertTrue(adopted.startswith("# my comment\n"))
+        self.assertNotIn("replaces", adopted)
+        self.assertIn("demo", [i.id for i in catalog.load(new_inv).all_items()])
+        self.assertTrue((new_inv / "notes/pitfalls.md").exists())
+        self.assertFalse((new_inv / "migration.yaml").exists())
+
+        # an existing inventory of the old release: differing files are kept as .bak-DATE, equal ones untouched
+        old_catalog = (self.inv / "catalog.yaml").read_bytes()
+        lines = []
+        migrate.adopt(t, self.inv, os_release=DEBIAN, today=datetime.date(2026, 3, 4), out=lines.append)
+        self.assertEqual((self.inv / "catalog.yaml.bak-20260304").read_bytes(), old_catalog)
+        self.assertEqual((self.inv / "catalog.yaml").read_text(), adopted)
+        self.assertTrue(any(l.startswith("same:") and "config.yaml" in l for l in lines), lines)
+
+    def test_adopt_needs_the_target_release(self):
+        t = self.init()
+        rc, out = self.run_mi("--data", str(self.root / "inv2"), "migrate", "adopt", str(t),
+                              "--os-release", str(NOBLE))
+        self.assertEqual(rc, 2)
+        self.assertIn("is for debian 13", out)
+        self.assertFalse((self.root / "inv2").exists())
+        rc, out = self.run_mi("--data", str(t), "migrate", "adopt", str(t), "--os-release", str(DEBIAN))
+        self.assertNotEqual(rc, 0)
+        self.assertIn("is a migration target", out)
 
     def test_real_restore_needs_the_target_release(self):
         osr = self.root / "os-release"

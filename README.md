@@ -175,7 +175,7 @@ git clone <your-migration-repo> migration
 ./mi migrate <target>
 ```
 
-`mi migrate <target>` is `restore` for `migration/<target>/` instead of `inventory/`, with the same options (`--dry-run`, `--select`, `--all-defaults`, ...). `mi migrate catalog <target>`, `mi migrate render <target>` and `mi migrate <target> --dry-run` judge items against the target's os-release, so you can dry-run a target on the old machine too. A real restore refuses to run on any release other than the target, and `export` and `check` refuse to run on a migration target (it is a plan, not facts about a machine). After the restore, start a fresh inventory on the new machine with `./mi init`, or clone your inventory repo and let `/inventory` catch it up.
+`mi migrate <target>` is `restore` for `migration/<target>/` instead of `inventory/`, with the same options (`--dry-run`, `--select`, `--all-defaults`, ...). `mi migrate catalog <target>`, `mi migrate render <target>` and `mi migrate <target> --dry-run` judge items against the target's os-release, so you can dry-run a target on the old machine too. A real restore refuses to run on any release other than the target, and `export` and `check` refuse to run on a migration target (it is a plan, not facts about a machine). After the restore, start the new machine's inventory from the target with `./mi migrate adopt <target>` (clone your inventory repo to `inventory/` first if you want to keep its history): it copies the target's `catalog.yaml` and `config.yaml` into `inventory/`, keeping differing files as `.bak-YYYYMMDD`. Then run `/inventory` (or `./mi export && ./mi check`). `/inventory` offers the adopt by itself on a migrated machine.
 
 ## Compatibility rules
 

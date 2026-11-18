@@ -54,26 +54,77 @@ def initial_packages():
         return {l.split()[1] for l in f if l.startswith("Package:")}
 
 
-def history():
-    """'date | command' for every install/remove/purge in apt's history, oldest first."""
-    files = sorted(glob.glob("/var/log/apt/history.log*"), key=lambda p: os.stat(p).st_mtime)
-    rows = []
-    for path in files:
+def _history_lines(pattern="/var/log/apt/history.log*"):
+    """Lines of apt's history logs, oldest file first; unreadable files are skipped."""
+    for path in sorted(glob.glob(pattern), key=lambda p: os.stat(p).st_mtime):
         opener = gzip.open if path.endswith(".gz") else open
         try:
             with opener(path, "rt", encoding="utf-8", errors="replace") as f:
-                date = ""
-                for line in f:
-                    line = line.rstrip("\n")
-                    if line.startswith("Start-Date:"):
-                        parts = line.split()
-                        date = parts[1] if len(parts) > 1 else ""
-                    elif line.startswith("Commandline:"):
-                        cmd = line[len("Commandline: "):]
-                        if re.search(r"install|remove|purge", cmd) and "pkgDepCache::AutoInstall" not in cmd:
-                            rows.append(f"{date} | {cmd}")
+                yield from f
         except OSError:
             continue
+
+
+HISTORY_PKG = re.compile(r"([^\s,()]+) \(([^)]*)\)")
+
+
+def _named_in_command(cmd):
+    """Package names given to an `apt(-get) install` command line (options and local .deb paths skipped)."""
+    words = cmd.split()
+    for verb in ("install", "reinstall"):
+        if verb in words:
+            return {w.split("=")[0].split(":")[0] for w in words[words.index(verb) + 1:]
+                    if not w.startswith("-") and "/" not in w}
+    return set()
+
+
+def requested_packages(lines=None):
+    """Names a user asked apt to install, from apt's history: the command line and the non-automatic Install: entries.
+
+    Fallback for systems without the installer's package list (/var/log/installer/initial-status.gz is not
+    written by the Subiquity / curtin installer of newer Ubuntu releases). Only entries with Requested-By
+    count (run through sudo or pkexec), so the image build and the installer's own apt runs are skipped.
+    Installs from a root shell without sudo, and logs that were rotated away, are not seen.
+    """
+    names = set()
+
+    def flush(entry):
+        if entry.get("Requested-By"):
+            names.update(_named_in_command(entry.get("Commandline", "")))
+            names.update(pkg.split(":")[0] for pkg, info in HISTORY_PKG.findall(entry.get("Install", ""))
+                         if "automatic" not in info)
+
+    entry = {}
+    for line in _history_lines() if lines is None else lines:
+        key, _, value = line.rstrip("\n").partition(": ")
+        if key == "Start-Date":
+            flush(entry)
+            entry = {}
+        entry[key] = value
+    flush(entry)
+    return names
+
+
+def user_added(manual, initial=None, requested=None):
+    """Manual packages the user added: not in the installer's list, or (without one) requested through apt."""
+    if initial is not None:
+        return [p for p in manual if p not in initial]
+    return [p for p in manual if p.split(":")[0] in requested]
+
+
+def history():
+    """'date | command' for every install/remove/purge in apt's history, oldest first."""
+    rows = []
+    date = ""
+    for line in _history_lines():
+        line = line.rstrip("\n")
+        if line.startswith("Start-Date:"):
+            parts = line.split()
+            date = parts[1] if len(parts) > 1 else ""
+        elif line.startswith("Commandline:"):
+            cmd = line[len("Commandline: "):]
+            if re.search(r"install|remove|purge", cmd) and "pkgDepCache::AutoInstall" not in cmd:
+                rows.append(f"{date} | {cmd}")
     return rows
 
 
@@ -147,10 +198,13 @@ def collect(ctx, snap):
 
     snap.guarded("packages/apt-manual.txt", _manual)
     snap.guarded("packages/apt-history.txt", lambda: snap.write_lines("packages/apt-history.txt", history()))
-    if INITIAL_STATUS.exists() and manual:
+    if manual:
+        # Without the installer's list (Subiquity / curtin installs), fall back to what apt installed on request.
         snap.guarded("packages/apt-user-added.txt", lambda: snap.write_lines(
-            "packages/apt-user-added.txt", [p for p in manual if p not in initial_packages()]))
-    elif INITIAL_STATUS.exists():
+            "packages/apt-user-added.txt",
+            user_added(manual, initial_packages()) if INITIAL_STATUS.exists()
+            else user_added(manual, requested=requested_packages())))
+    else:
         snap.carry_over("packages/apt-user-added.txt", "apt-manual could not be collected")
     snap.guarded("packages/apt-local.txt", lambda: snap.write_lines("packages/apt-local.txt", local_packages()))
 
@@ -219,7 +273,10 @@ def check(ctx, rep):
 
 
 def drift(ctx, catalog, rep):
-    added = read_lines(ctx.snapshot / "packages/apt-user-added.txt")
+    path = ctx.snapshot / "packages/apt-user-added.txt"
+    if not path.exists():
+        rep.warn("apt: no packages/apt-user-added.txt in the snapshot; uncatalogued packages cannot be found (run `mi export`)")
+    added = read_lines(path)
     claimed = catalog.claimed("apt")
     ignore = claimed | set(ctx.cfg["restore_exclude"]) | set(ctx.cfg["known_local_debs"])
     unclaimed = [p for p in added if p not in ignore]

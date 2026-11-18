@@ -32,6 +32,18 @@ def _refuse_migration(ctx, what):
 
 # --- init ------------------------------------------------------------------
 
+def _seed_notes(data):
+    for rel, text in (("notes/pitfalls.md", "# Pitfalls on this machine\n\nLessons learned the hard way. "
+                       "The /inventory skill reads this first and appends new ones.\n"),
+                      ("reports/inventory-log.md", "# Inventory log\n\nEvery `/inventory` scan adds a dated "
+                       "section at the top. Newest first.\n")):
+        p = data / rel
+        if not p.exists():
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text, encoding="utf-8")
+            print(f"created: {p}")
+
+
 def cmd_init(args):
     ctx = _ctx(args)
     _refuse_migration(ctx, "init")
@@ -43,15 +55,7 @@ def cmd_init(args):
         else:
             shutil.copyfile(EXAMPLES / name, dst)
             print(f"created: {dst}")
-    for rel, text in (("notes/pitfalls.md", "# Pitfalls on this machine\n\nLessons learned the hard way. "
-                       "The /inventory skill reads this first and appends new ones.\n"),
-                      ("reports/inventory-log.md", "# Inventory log\n\nEvery `/inventory` scan adds a dated "
-                       "section at the top. Newest first.\n")):
-        p = ctx.data / rel
-        if not p.exists():
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(text, encoding="utf-8")
-            print(f"created: {p}")
+    _seed_notes(ctx.data)
     print(f"Next: edit {ctx.data.name}/config.yaml, then run `./mi export` and `./mi check`.")
     return 0
 
@@ -242,6 +246,21 @@ def cmd_migrate_catalog(args):
     return cmd_catalog(_target_args(args))
 
 
+def cmd_migrate_adopt(args):
+    inventory = _inventory_dir(args)
+    if (inventory / MIGRATION_FILE).exists():
+        raise SystemExit(f"{inventory} is a migration target, not an inventory")
+    try:
+        migrate.adopt(migration_dir(args.name), inventory, os_release=args.os_release or "/etc/os-release",
+                      force=args.force)
+    except migrate.MigrationError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    _seed_notes(inventory)
+    print("Next: ./mi export, ./mi render and ./mi check (or /inventory in Claude Code).")
+    return 0
+
+
 def cmd_migrate_check(args):
     target = migration_dir(args.name)
     inventory = Path(args.data) if args.data else default_data()
@@ -292,7 +311,7 @@ def _add_restore_args(s):
                    help="never ask on a failure: skip the command and list it at the end")
 
 
-MIGRATE_ACTIONS = ("init", "check", "render", "catalog", "restore")
+MIGRATE_ACTIONS = ("init", "check", "render", "catalog", "adopt", "restore")
 
 
 def _route_migrate(argv):
@@ -345,8 +364,9 @@ def main(argv=None):
                        description="Migration targets live in <tool>/migration/<target>. "
                                    "`mi migrate <target>` installs a target on the new machine "
                                    "(same options as restore, e.g. `mi migrate ubuntu-26.04 --dry-run`); "
-                                   "init, check, render and catalog prepare and inspect targets.")
-    msub = s.add_subparsers(dest="migrate_cmd", required=True, metavar="{<target>,init,check,render,catalog}")
+                                   "init, check, render and catalog prepare and inspect targets; "
+                                   "adopt starts the new machine's inventory from its target.")
+    msub = s.add_subparsers(dest="migrate_cmd", required=True, metavar="{<target>,init,check,render,catalog,adopt}")
     m = msub.add_parser("restore", prog="mi migrate")   # reached through `mi migrate <target>`, not listed
     m.add_argument("name", help="target name (e.g. ubuntu-26.04) or a path containing /")
     _add_restore_args(m)
@@ -367,6 +387,11 @@ def main(argv=None):
     m = msub.add_parser("catalog", help="list a target's groups and items")
     m.add_argument("name", help="target name (e.g. debian-13) or a path containing /")
     m.set_defaults(fn=cmd_migrate_catalog)
+    m = msub.add_parser("adopt", help="on the migrated machine: start inventory/ from a target's catalog and config")
+    m.add_argument("name", help="target name (e.g. ubuntu-26.04) or a path containing /")
+    m.add_argument("--force", action="store_true", help="adopt even if this machine runs another release")
+    m.add_argument("--os-release", help=argparse.SUPPRESS)
+    m.set_defaults(fn=cmd_migrate_adopt)
 
     s = sub.add_parser("install-skill", help="link the Claude Code skills (/inventory, /migration) into "
                                              "~/.claude/skills")

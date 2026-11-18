@@ -120,7 +120,8 @@ Write or refresh `$MIGRATION/README.md` from what is in the repo now (never from
   - **Migrate to a new machine**, as separate `bash` blocks:
     `git clone <tool-repo-url> machine-inventory && cd machine-inventory`,
     `git clone <your-migration-repo> migration`, `./bootstrap.sh`, `./mi install-skill`,
-    `./mi migrate <target> --dry-run`, `./mi migrate <target>`;
+    `./mi migrate <target> --dry-run`, `./mi migrate <target>`, then `./mi migrate adopt <target>` (the new
+    machine's inventory starts from the target; `/inventory` does it too);
   - open `todo`s and the items' manual steps, in the order the user will meet them.
 
 Nothing else: no change log and no list of dropped items (both are in each target's `INVENTORY.md`).
